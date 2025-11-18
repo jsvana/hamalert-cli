@@ -27,13 +27,16 @@ struct Cli {
 enum Commands {
     AddTrigger {
         #[arg(long)]
-        callsign: String,
+        callsign: Vec<String>,
 
         #[arg(long)]
         comment: String,
 
         #[arg(long, value_enum)]
         actions: Vec<Action>,
+
+        #[arg(long, value_enum)]
+        mode: Option<Mode>,
     },
 }
 
@@ -45,6 +48,13 @@ enum Action {
     Telnet,
 }
 
+#[derive(Clone, ValueEnum)]
+enum Mode {
+    CW,
+    FT8,
+    SSB,
+}
+
 impl Action {
     fn as_str(&self) -> &str {
         match self {
@@ -52,6 +62,16 @@ impl Action {
             Action::App => "app",
             Action::Threema => "threema",
             Action::Telnet => "telnet",
+        }
+    }
+}
+
+impl Mode {
+    fn as_str(&self) -> &str {
+        match self {
+            Mode::CW => "cw",
+            Mode::FT8 => "ft8",
+            Mode::SSB => "ssb",
         }
     }
 }
@@ -67,6 +87,8 @@ struct TriggerData {
 #[derive(Serialize)]
 struct Conditions {
     callsign: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mode: Option<String>,
 }
 
 fn load_config(config_file: Option<PathBuf>) -> Result<Config, Box<dyn Error>> {
@@ -90,7 +112,11 @@ fn load_config(config_file: Option<PathBuf>) -> Result<Config, Box<dyn Error>> {
                 config_path.display()
             )
         } else {
-            format!("Failed to read config file at {}: {}", config_path.display(), e)
+            format!(
+                "Failed to read config file at {}: {}",
+                config_path.display(),
+                e
+            )
         }
     })?;
 
@@ -123,10 +149,12 @@ async fn add_trigger(
     callsign: &str,
     comment: &str,
     actions: Vec<String>,
+    mode: Option<String>,
 ) -> Result<(), Box<dyn Error>> {
     let trigger_data = TriggerData {
         conditions: Conditions {
             callsign: callsign.to_string(),
+            mode,
         },
         comment: comment.to_string(),
         actions,
@@ -139,7 +167,7 @@ async fn add_trigger(
         .send()
         .await?;
 
-    println!("Add trigger status: {}", response.status());
+    println!("Add trigger status for {}: {}", callsign, response.status());
 
     // Optionally print the response body
     let body = response.text().await?;
@@ -169,11 +197,24 @@ async fn main() -> Result<(), Box<dyn Error>> {
             callsign,
             comment,
             actions,
+            mode,
         } => {
             let action_strings: Vec<String> =
                 actions.iter().map(|a| a.as_str().to_string()).collect();
 
-            add_trigger(&client, &callsign, &comment, action_strings).await?;
+            let mode_string = mode.as_ref().map(|m| m.as_str().to_string());
+
+            // Loop through each callsign and make a separate API call
+            for cs in callsign {
+                add_trigger(
+                    &client,
+                    &cs,
+                    &comment,
+                    action_strings.clone(),
+                    mode_string.clone(),
+                )
+                .await?;
+            }
         }
     }
 

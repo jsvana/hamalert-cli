@@ -50,7 +50,7 @@ hamalert-cli --config-file /path/to/config.toml <command>
 
 ### Add a Trigger
 
-Add a new callsign trigger with specified actions:
+Add callsign triggers with specified actions. You can add multiple callsigns in a single command, and each will receive its own trigger via a separate API call:
 
 ```bash
 hamalert-cli add-trigger \
@@ -69,6 +69,16 @@ hamalert-cli add-trigger \
 
 You can specify multiple actions by repeating the `--actions` flag.
 
+#### Available Modes
+
+You can optionally specify a mode to filter alerts by transmission mode:
+
+- `cw` - CW (Morse code)
+- `ft8` - FT8 digital mode
+- `ssb` - SSB (Single Side Band)
+
+The `--mode` parameter is optional. If not specified, alerts will trigger for all modes.
+
 ### Examples
 
 Monitor a specific callsign with app notifications:
@@ -77,15 +87,37 @@ Monitor a specific callsign with app notifications:
 hamalert-cli add-trigger --callsign K3LR --comment "K3LR spotted" --actions app
 ```
 
-Add multiple notification methods:
+Add multiple callsigns at once (each gets its own trigger):
 
 ```bash
 hamalert-cli add-trigger \
+  --callsign W1AW \
+  --callsign K3LR \
   --callsign DX1DX \
-  --comment "Rare DX alert" \
+  --comment "Multiple DX stations" \
+  --actions app
+```
+
+Monitor a callsign only for FT8 activity:
+
+```bash
+hamalert-cli add-trigger \
+  --callsign VP8LP \
+  --comment "FT8 only" \
+  --actions app \
+  --mode ft8
+```
+
+Monitor multiple callsigns for CW mode with multiple notification methods:
+
+```bash
+hamalert-cli add-trigger \
+  --callsign W1AW \
+  --callsign K3LR \
+  --comment "CW operators" \
   --actions url \
   --actions app \
-  --actions threema
+  --mode cw
 ```
 
 ## License
