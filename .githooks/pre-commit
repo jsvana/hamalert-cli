@@ -1,0 +1,29 @@
+#!/bin/sh
+#
+# Pre-commit hook to run formatting, linting, and tests before commit.
+# Install with: git config core.hooksPath .githooks
+
+set -e
+
+echo "Running cargo fmt..."
+cargo fmt --all -- --check
+if [ $? -ne 0 ]; then
+    echo "❌ cargo fmt failed. Run 'cargo fmt' to fix formatting."
+    exit 1
+fi
+
+echo "Running cargo clippy..."
+cargo clippy --all-targets --all-features -- -D warnings
+if [ $? -ne 0 ]; then
+    echo "❌ cargo clippy failed. Fix the warnings above."
+    exit 1
+fi
+
+echo "Running cargo test..."
+cargo test --all-features
+if [ $? -ne 0 ]; then
+    echo "❌ cargo test failed. Fix the failing tests."
+    exit 1
+fi
+
+echo "✅ All checks passed!"

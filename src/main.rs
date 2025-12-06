@@ -49,6 +49,7 @@ enum Action {
 }
 
 #[derive(Clone, ValueEnum)]
+#[allow(clippy::upper_case_acronyms)]
 enum Mode {
     CW,
     FT8,
