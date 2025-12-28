@@ -1,3 +1,5 @@
+#[allow(unused_imports)] // Used in backup handler (Task 5)
+use chrono::Local;
 use clap::{Parser, Subcommand, ValueEnum};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -56,6 +58,12 @@ enum Commands {
         /// Show what would be added without actually adding triggers
         #[arg(long)]
         dry_run: bool,
+    },
+    /// Backup all triggers to a JSON file
+    Backup {
+        /// Output file path (default: hamalert-backup-YYYY-MM-DD.json)
+        #[arg(long)]
+        output: Option<PathBuf>,
     },
 }
 
@@ -319,6 +327,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     .await?;
                 }
             }
+        }
+        Commands::Backup { output: _ } => {
+            // TODO: Implement backup functionality in Task 5
+            unimplemented!("Backup command not yet implemented")
         }
     }
 
