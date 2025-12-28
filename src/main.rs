@@ -211,6 +211,39 @@ async fn fetch_polo_notes(client: &Client, url: &str) -> Result<Vec<String>, Box
     Ok(parse_polo_notes_content(&content))
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
+struct Trigger {
+    #[serde(rename = "_id")]
+    id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    user_id: Option<String>,
+    conditions: serde_json::Value,
+    actions: Vec<String>,
+    comment: String,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "matchCount")]
+    match_count: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    disabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    options: Option<serde_json::Value>,
+}
+
+#[allow(dead_code)]
+async fn fetch_triggers(client: &Client) -> Result<Vec<Trigger>, Box<dyn Error>> {
+    let response = client
+        .get("https://hamalert.org/ajax/triggers")
+        .send()
+        .await?;
+
+    if !response.status().is_success() {
+        return Err(format!("Failed to fetch triggers: {}", response.status()).into());
+    }
+
+    let triggers: Vec<Trigger> = response.json().await?;
+    Ok(triggers)
+}
+
 async fn add_trigger(
     client: &Client,
     callsign: &str,
