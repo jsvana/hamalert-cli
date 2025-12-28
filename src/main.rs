@@ -263,17 +263,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
             let mode_string = mode.as_ref().map(|m| m.as_str().to_string());
 
-            // Loop through each callsign and make a separate API call
-            for cs in callsign {
-                add_trigger(
-                    &client,
-                    &cs,
-                    &comment,
-                    action_strings.clone(),
-                    mode_string.clone(),
-                )
-                .await?;
-            }
+            // Join all callsigns with commas for a single trigger
+            let combined_callsigns = callsign.join(",");
+            add_trigger(
+                &client,
+                &combined_callsigns,
+                &comment,
+                action_strings,
+                mode_string,
+            )
+            .await?;
         }
         Commands::ImportPoloNotes {
             url,
