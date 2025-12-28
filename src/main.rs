@@ -40,9 +40,9 @@ enum Commands {
     },
     /// Add triggers for all callsigns in a Ham2K PoLo callsign notes file
     ImportPoloNotes {
-        /// Path to the Ham2K PoLo callsign notes file
+        /// URL to the Ham2K PoLo callsign notes file
         #[arg(long)]
-        file: PathBuf,
+        url: String,
 
         #[arg(long)]
         comment: String,
@@ -52,6 +52,10 @@ enum Commands {
 
         #[arg(long, value_enum)]
         mode: Option<Mode>,
+
+        /// Show what would be added without actually adding triggers
+        #[arg(long)]
+        dry_run: bool,
     },
 }
 
@@ -160,19 +164,11 @@ async fn login(client: &Client, username: &str, password: &str) -> Result<(), Bo
     Ok(())
 }
 
-/// Parse a Ham2K PoLo callsign notes file and extract callsigns.
+/// Parse Ham2K PoLo callsign notes content and extract callsigns.
 /// Each line's first word is treated as a callsign.
 /// Empty lines and comment lines (starting with # or //) are skipped.
-fn parse_polo_notes(path: &PathBuf) -> Result<Vec<String>, Box<dyn Error>> {
-    let content = fs::read_to_string(path).map_err(|e| {
-        format!(
-            "Failed to read PoLo notes file at {}: {}",
-            path.display(),
-            e
-        )
-    })?;
-
-    let callsigns: Vec<String> = content
+fn parse_polo_notes_content(content: &str) -> Vec<String> {
+    content
         .lines()
         .filter_map(|line| {
             let trimmed = line.trim();
@@ -187,9 +183,24 @@ fn parse_polo_notes(path: &PathBuf) -> Result<Vec<String>, Box<dyn Error>> {
             // Extract the first word (callsign)
             trimmed.split_whitespace().next().map(|s| s.to_string())
         })
-        .collect();
+        .collect()
+}
 
-    Ok(callsigns)
+/// Fetch and parse Ham2K PoLo callsign notes from a URL.
+async fn fetch_polo_notes(client: &Client, url: &str) -> Result<Vec<String>, Box<dyn Error>> {
+    let response = client.get(url).send().await?;
+
+    if !response.status().is_success() {
+        return Err(format!(
+            "Failed to fetch PoLo notes from {}: {}",
+            url,
+            response.status()
+        )
+        .into());
+    }
+
+    let content = response.text().await?;
+    Ok(parse_polo_notes_content(&content))
 }
 
 async fn add_trigger(
@@ -265,37 +276,146 @@ async fn main() -> Result<(), Box<dyn Error>> {
             }
         }
         Commands::ImportPoloNotes {
-            file,
+            url,
             comment,
             actions,
             mode,
+            dry_run,
         } => {
-            let callsigns = parse_polo_notes(&file)?;
+            let callsigns = fetch_polo_notes(&client, &url).await?;
 
             if callsigns.is_empty() {
-                println!("No callsigns found in {}", file.display());
+                println!("No callsigns found at {}", url);
                 return Ok(());
             }
 
-            println!("Found {} callsigns in {}", callsigns.len(), file.display());
+            println!("Found {} callsigns at {}", callsigns.len(), url);
 
             let action_strings: Vec<String> =
                 actions.iter().map(|a| a.as_str().to_string()).collect();
 
             let mode_string = mode.as_ref().map(|m| m.as_str().to_string());
 
-            for cs in callsigns {
-                add_trigger(
-                    &client,
-                    &cs,
-                    &comment,
-                    action_strings.clone(),
-                    mode_string.clone(),
-                )
-                .await?;
+            if dry_run {
+                println!("\nDry run - would add triggers for:");
+                for cs in &callsigns {
+                    println!(
+                        "  {} (comment: {:?}, actions: {:?}, mode: {:?})",
+                        cs, comment, action_strings, mode_string
+                    );
+                }
+                println!("\nTotal: {} triggers", callsigns.len());
+            } else {
+                for cs in callsigns {
+                    add_trigger(
+                        &client,
+                        &cs,
+                        &comment,
+                        action_strings.clone(),
+                        mode_string.clone(),
+                    )
+                    .await?;
+                }
             }
         }
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_polo_notes_simple_callsigns() {
+        let content = "W1ABC\nK2DEF\nN3GHI";
+        let result = parse_polo_notes_content(content);
+        assert_eq!(result, vec!["W1ABC", "K2DEF", "N3GHI"]);
+    }
+
+    #[test]
+    fn test_parse_polo_notes_callsigns_with_notes() {
+        let content = "W1ABC friend from club\nK2DEF met at field day\nN3GHI";
+        let result = parse_polo_notes_content(content);
+        assert_eq!(result, vec!["W1ABC", "K2DEF", "N3GHI"]);
+    }
+
+    #[test]
+    fn test_parse_polo_notes_empty_content() {
+        let content = "";
+        let result = parse_polo_notes_content(content);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_parse_polo_notes_only_empty_lines() {
+        let content = "\n\n\n";
+        let result = parse_polo_notes_content(content);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_parse_polo_notes_hash_comments() {
+        let content = "# This is a comment\nW1ABC\n# Another comment\nK2DEF";
+        let result = parse_polo_notes_content(content);
+        assert_eq!(result, vec!["W1ABC", "K2DEF"]);
+    }
+
+    #[test]
+    fn test_parse_polo_notes_slash_comments() {
+        let content = "// This is a comment\nW1ABC\n// Another comment\nK2DEF";
+        let result = parse_polo_notes_content(content);
+        assert_eq!(result, vec!["W1ABC", "K2DEF"]);
+    }
+
+    #[test]
+    fn test_parse_polo_notes_mixed_comments() {
+        let content = "# Hash comment\n// Slash comment\nW1ABC";
+        let result = parse_polo_notes_content(content);
+        assert_eq!(result, vec!["W1ABC"]);
+    }
+
+    #[test]
+    fn test_parse_polo_notes_whitespace_handling() {
+        let content = "  W1ABC  \n\tK2DEF\t\n   N3GHI   notes here";
+        let result = parse_polo_notes_content(content);
+        assert_eq!(result, vec!["W1ABC", "K2DEF", "N3GHI"]);
+    }
+
+    #[test]
+    fn test_parse_polo_notes_mixed_content() {
+        let content = "# Header comment\n\nW1ABC friend\n\n// Another comment\nK2DEF\n\n";
+        let result = parse_polo_notes_content(content);
+        assert_eq!(result, vec!["W1ABC", "K2DEF"]);
+    }
+
+    #[test]
+    fn test_parse_polo_notes_only_comments() {
+        let content = "# Comment 1\n// Comment 2\n# Comment 3";
+        let result = parse_polo_notes_content(content);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_parse_polo_notes_indented_comments() {
+        let content = "  # Indented hash comment\n  // Indented slash comment\nW1ABC";
+        let result = parse_polo_notes_content(content);
+        assert_eq!(result, vec!["W1ABC"]);
+    }
+
+    #[test]
+    fn test_parse_polo_notes_single_callsign() {
+        let content = "W1ABC";
+        let result = parse_polo_notes_content(content);
+        assert_eq!(result, vec!["W1ABC"]);
+    }
+
+    #[test]
+    fn test_parse_polo_notes_callsign_with_hash_in_note() {
+        // A hash in the middle of a note (not at start) should not be treated as comment
+        let content = "W1ABC note with #hashtag";
+        let result = parse_polo_notes_content(content);
+        assert_eq!(result, vec!["W1ABC"]);
+    }
 }
