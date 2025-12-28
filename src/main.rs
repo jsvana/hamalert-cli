@@ -1,4 +1,3 @@
-#[allow(unused_imports)] // Used in backup handler (Task 5)
 use chrono::Local;
 use clap::{Parser, Subcommand, ValueEnum};
 use reqwest::Client;
@@ -212,7 +211,6 @@ async fn fetch_polo_notes(client: &Client, url: &str) -> Result<Vec<String>, Box
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)]
 struct Trigger {
     #[serde(rename = "_id")]
     id: String,
@@ -229,7 +227,6 @@ struct Trigger {
     options: Option<serde_json::Value>,
 }
 
-#[allow(dead_code)]
 async fn fetch_triggers(client: &Client) -> Result<Vec<Trigger>, Box<dyn Error>> {
     let response = client
         .get("https://hamalert.org/ajax/triggers")
@@ -361,9 +358,22 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 }
             }
         }
-        Commands::Backup { output: _ } => {
-            // TODO: Implement backup functionality in Task 5
-            unimplemented!("Backup command not yet implemented")
+        Commands::Backup { output } => {
+            let triggers = fetch_triggers(&client).await?;
+
+            let output_path = output.unwrap_or_else(|| {
+                let date = Local::now().format("%Y-%m-%d");
+                PathBuf::from(format!("hamalert-backup-{}.json", date))
+            });
+
+            let json = serde_json::to_string_pretty(&triggers)?;
+            fs::write(&output_path, json)?;
+
+            println!(
+                "Backed up {} triggers to {}",
+                triggers.len(),
+                output_path.display()
+            );
         }
     }
 
