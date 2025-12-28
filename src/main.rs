@@ -64,6 +64,16 @@ enum Commands {
         #[arg(long)]
         output: Option<PathBuf>,
     },
+    /// Restore triggers from a JSON backup file
+    Restore {
+        /// Input backup file path
+        #[arg(long)]
+        input: PathBuf,
+
+        /// Actually perform the restore (default is dry-run)
+        #[arg(long)]
+        no_dry_run: bool,
+    },
 }
 
 #[derive(Clone, ValueEnum)]
@@ -374,6 +384,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 triggers.len(),
                 output_path.display()
             );
+        }
+        Commands::Restore {
+            input: _,
+            no_dry_run: _,
+        } => {
+            unimplemented!("Restore command not yet implemented")
         }
     }
 
