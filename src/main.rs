@@ -38,6 +38,21 @@ enum Commands {
         #[arg(long, value_enum)]
         mode: Option<Mode>,
     },
+    /// Add triggers for all callsigns in a Ham2K PoLo callsign notes file
+    ImportPoloNotes {
+        /// Path to the Ham2K PoLo callsign notes file
+        #[arg(long)]
+        file: PathBuf,
+
+        #[arg(long)]
+        comment: String,
+
+        #[arg(long, value_enum)]
+        actions: Vec<Action>,
+
+        #[arg(long, value_enum)]
+        mode: Option<Mode>,
+    },
 }
 
 #[derive(Clone, ValueEnum)]
@@ -145,6 +160,38 @@ async fn login(client: &Client, username: &str, password: &str) -> Result<(), Bo
     Ok(())
 }
 
+/// Parse a Ham2K PoLo callsign notes file and extract callsigns.
+/// Each line's first word is treated as a callsign.
+/// Empty lines and comment lines (starting with # or //) are skipped.
+fn parse_polo_notes(path: &PathBuf) -> Result<Vec<String>, Box<dyn Error>> {
+    let content = fs::read_to_string(path).map_err(|e| {
+        format!(
+            "Failed to read PoLo notes file at {}: {}",
+            path.display(),
+            e
+        )
+    })?;
+
+    let callsigns: Vec<String> = content
+        .lines()
+        .filter_map(|line| {
+            let trimmed = line.trim();
+            // Skip empty lines
+            if trimmed.is_empty() {
+                return None;
+            }
+            // Skip comment lines
+            if trimmed.starts_with('#') || trimmed.starts_with("//") {
+                return None;
+            }
+            // Extract the first word (callsign)
+            trimmed.split_whitespace().next().map(|s| s.to_string())
+        })
+        .collect();
+
+    Ok(callsigns)
+}
+
 async fn add_trigger(
     client: &Client,
     callsign: &str,
@@ -207,6 +254,37 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
             // Loop through each callsign and make a separate API call
             for cs in callsign {
+                add_trigger(
+                    &client,
+                    &cs,
+                    &comment,
+                    action_strings.clone(),
+                    mode_string.clone(),
+                )
+                .await?;
+            }
+        }
+        Commands::ImportPoloNotes {
+            file,
+            comment,
+            actions,
+            mode,
+        } => {
+            let callsigns = parse_polo_notes(&file)?;
+
+            if callsigns.is_empty() {
+                println!("No callsigns found in {}", file.display());
+                return Ok(());
+            }
+
+            println!("Found {} callsigns in {}", callsigns.len(), file.display());
+
+            let action_strings: Vec<String> =
+                actions.iter().map(|a| a.as_str().to_string()).collect();
+
+            let mode_string = mode.as_ref().map(|m| m.as_str().to_string());
+
+            for cs in callsigns {
                 add_trigger(
                     &client,
                     &cs,
