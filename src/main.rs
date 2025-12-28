@@ -263,6 +263,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
             let mode_string = mode.as_ref().map(|m| m.as_str().to_string());
 
+            if callsign.is_empty() {
+                return Err("At least one --callsign must be provided".into());
+            }
             // Join all callsigns with commas for a single trigger
             let combined_callsigns = callsign.join(",");
             add_trigger(
