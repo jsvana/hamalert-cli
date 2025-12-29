@@ -285,6 +285,21 @@ async fn add_trigger(
     Ok(())
 }
 
+#[allow(dead_code)]
+async fn delete_trigger(client: &Client, id: &str) -> Result<(), Box<dyn Error>> {
+    let response = client
+        .post("https://hamalert.org/ajax/trigger_delete")
+        .form(&[("id", id)])
+        .send()
+        .await?;
+
+    if !response.status().is_success() {
+        return Err(format!("Failed to delete trigger {}: {}", id, response.status()).into());
+    }
+
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let cli = Cli::parse();
