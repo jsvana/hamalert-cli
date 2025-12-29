@@ -9,7 +9,9 @@
       "Bash(git -C /home/jsvana/projects/hamalert-sub add src/main.rs)",
       "Bash(git -C /home/jsvana/projects/hamalert-sub commit -m \"$\\(cat <<''EOF''\nfeat: implement restore command\n\n- Dry-run by default showing what would happen\n- Auto-backup before destructive restore\n- Deletes all existing triggers then restores from file\n\n🤖 Generated with [Claude Code]\\(https://claude.com/claude-code\\)\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
       "Bash(git add:*)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "WebFetch(domain:crates.io)",
+      "WebFetch(domain:docs.rs)"
     ],
     "deny": [],
     "ask": []
