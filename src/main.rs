@@ -74,6 +74,8 @@ enum Commands {
         #[arg(long)]
         no_dry_run: bool,
     },
+    /// Interactively edit an existing trigger
+    Edit,
 }
 
 #[derive(Clone, ValueEnum)]
@@ -493,6 +495,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 backup_triggers.len(),
                 input.display()
             );
+        }
+        Commands::Edit => {
+            unimplemented!("Edit command not yet implemented")
         }
     }
 
