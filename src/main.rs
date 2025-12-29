@@ -239,6 +239,21 @@ struct Trigger {
     options: Option<serde_json::Value>,
 }
 
+#[allow(dead_code)]
+fn format_trigger_for_display(trigger: &Trigger) -> String {
+    let mode = trigger
+        .conditions
+        .get("mode")
+        .and_then(|v| v.as_str())
+        .unwrap_or("any");
+    let callsign = trigger
+        .conditions
+        .get("callsign")
+        .and_then(|v| v.as_str())
+        .unwrap_or("?");
+    format!("[{}] {} - \"{}\"", mode, callsign, trigger.comment)
+}
+
 async fn fetch_triggers(client: &Client) -> Result<Vec<Trigger>, Box<dyn Error>> {
     let response = client
         .get("https://hamalert.org/ajax/triggers")
