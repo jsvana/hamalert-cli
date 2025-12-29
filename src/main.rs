@@ -300,6 +300,37 @@ async fn delete_trigger(client: &Client, id: &str) -> Result<(), Box<dyn Error>>
     Ok(())
 }
 
+#[allow(dead_code)]
+async fn create_trigger_from_backup(
+    client: &Client,
+    trigger: &Trigger,
+) -> Result<(), Box<dyn Error>> {
+    // Build trigger data without _id so a new one is created
+    let trigger_data = serde_json::json!({
+        "conditions": trigger.conditions,
+        "actions": trigger.actions,
+        "comment": trigger.comment,
+        "options": trigger.options.clone().unwrap_or(serde_json::json!({})),
+    });
+
+    let response = client
+        .post("https://hamalert.org/ajax/trigger_update")
+        .json(&trigger_data)
+        .send()
+        .await?;
+
+    if !response.status().is_success() {
+        return Err(format!(
+            "Failed to create trigger '{}': {}",
+            trigger.comment,
+            response.status()
+        )
+        .into());
+    }
+
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let cli = Cli::parse();
