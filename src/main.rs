@@ -240,7 +240,6 @@ struct Trigger {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)]
 struct EditableTrigger {
     conditions: serde_json::Value,
     actions: Vec<String>,
@@ -249,7 +248,6 @@ struct EditableTrigger {
     options: Option<serde_json::Value>,
 }
 
-#[allow(dead_code)]
 impl EditableTrigger {
     fn from_trigger(trigger: &Trigger) -> Self {
         Self {
@@ -268,7 +266,6 @@ impl EditableTrigger {
     }
 }
 
-#[allow(dead_code)]
 fn format_trigger_for_display(trigger: &Trigger) -> String {
     let mode = trigger
         .conditions
@@ -375,7 +372,6 @@ async fn create_trigger_from_backup(
     Ok(())
 }
 
-#[allow(dead_code)]
 async fn update_trigger(client: &Client, trigger: &Trigger) -> Result<(), Box<dyn Error>> {
     let trigger_data = serde_json::json!({
         "_id": trigger.id,
@@ -569,7 +565,94 @@ async fn main() -> Result<(), Box<dyn Error>> {
             );
         }
         Commands::Edit => {
-            unimplemented!("Edit command not yet implemented")
+            let triggers = fetch_triggers(&client).await?;
+
+            if triggers.is_empty() {
+                println!("No triggers found.");
+                return Ok(());
+            }
+
+            // Display numbered list
+            println!("Select a trigger to edit:\n");
+            for (i, trigger) in triggers.iter().enumerate() {
+                println!("  {}. {}", i + 1, format_trigger_for_display(trigger));
+            }
+            println!("\nEnter number (1-{}), or q to quit: ", triggers.len());
+
+            // Read user selection
+            let mut input = String::new();
+            std::io::stdin().read_line(&mut input)?;
+            let input = input.trim();
+
+            if input.eq_ignore_ascii_case("q") {
+                println!("Cancelled.");
+                return Ok(());
+            }
+
+            let selection: usize = input.parse().map_err(|_| "Invalid selection")?;
+
+            if selection < 1 || selection > triggers.len() {
+                return Err(format!("Selection must be between 1 and {}", triggers.len()).into());
+            }
+
+            let mut trigger = triggers[selection - 1].clone();
+            let original_editable = EditableTrigger::from_trigger(&trigger);
+
+            // Create temp file with editable JSON
+            let temp_dir = std::env::temp_dir();
+            let temp_path = temp_dir.join(format!("hamalert-edit-{}.json", trigger.id));
+            let json = serde_json::to_string_pretty(&original_editable)?;
+            fs::write(&temp_path, &json)?;
+
+            // Open in editor
+            let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
+
+            loop {
+                let status = std::process::Command::new(&editor)
+                    .arg(&temp_path)
+                    .status()
+                    .map_err(|e| format!("Failed to open editor '{}': {}", editor, e))?;
+
+                if !status.success() {
+                    fs::remove_file(&temp_path).ok();
+                    return Err("Editor exited with error".into());
+                }
+
+                // Read and parse edited content
+                let edited_content = fs::read_to_string(&temp_path)?;
+
+                match serde_json::from_str::<EditableTrigger>(&edited_content) {
+                    Ok(edited) => {
+                        // Check if anything changed
+                        let edited_json = serde_json::to_string(&edited)?;
+                        let original_json = serde_json::to_string(&original_editable)?;
+
+                        if edited_json == original_json {
+                            println!("No changes made.");
+                        } else {
+                            edited.apply_to_trigger(&mut trigger);
+                            update_trigger(&client, &trigger).await?;
+                            println!("Updated trigger: {}", trigger.comment);
+                        }
+
+                        fs::remove_file(&temp_path).ok();
+                        break;
+                    }
+                    Err(e) => {
+                        println!("Invalid JSON: {}", e);
+                        println!("Press Enter to re-edit, or 'q' to quit without saving: ");
+
+                        let mut retry_input = String::new();
+                        std::io::stdin().read_line(&mut retry_input)?;
+
+                        if retry_input.trim().eq_ignore_ascii_case("q") {
+                            fs::remove_file(&temp_path).ok();
+                            println!("Cancelled without saving.");
+                            break;
+                        }
+                    }
+                }
+            }
         }
     }
 
