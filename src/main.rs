@@ -1,5 +1,6 @@
 use chrono::Local;
 use clap::{Parser, Subcommand, ValueEnum};
+use inquire::{InquireError, MultiSelect};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -76,6 +77,12 @@ enum Commands {
     },
     /// Interactively edit an existing trigger
     Edit,
+    /// Interactively delete multiple triggers with TUI selection
+    BulkDelete {
+        /// Show what would be deleted without actually deleting
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[derive(Clone, ValueEnum)]
@@ -641,6 +648,109 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     }
                 }
             }
+        }
+        Commands::BulkDelete { dry_run } => {
+            let triggers = fetch_triggers(&client).await?;
+
+            if triggers.is_empty() {
+                println!("No triggers found.");
+                return Ok(());
+            }
+
+            println!("Fetched {} triggers.\n", triggers.len());
+            println!("Instructions:");
+            println!("  j/k or arrows: Navigate up/down");
+            println!("  Space: Toggle selection (unchecked = will be DELETED)");
+            println!("  Enter: Confirm");
+            println!("  Esc: Cancel\n");
+
+            // Build display items
+            let display_items: Vec<String> =
+                triggers.iter().map(format_trigger_for_display).collect();
+
+            // All items start selected (checked = keep)
+            let default_selections: Vec<usize> = (0..triggers.len()).collect();
+
+            // Run the interactive multi-select
+            let kept_result = MultiSelect::new(
+                "Select triggers to KEEP (unchecked will be deleted):",
+                display_items.clone(),
+            )
+            .with_default(&default_selections)
+            .with_vim_mode(true)
+            .with_page_size(15)
+            .with_help_message("Space=toggle, j/k=navigate, Enter=confirm, Esc=cancel")
+            .prompt();
+
+            let kept_displays: Vec<String> = match kept_result {
+                Ok(selected) => selected,
+                Err(InquireError::OperationCanceled) | Err(InquireError::OperationInterrupted) => {
+                    println!("Operation cancelled.");
+                    return Ok(());
+                }
+                Err(e) => return Err(e.into()),
+            };
+
+            // Find triggers to delete (those NOT in kept list)
+            let kept_set: std::collections::HashSet<&str> =
+                kept_displays.iter().map(|s| s.as_str()).collect();
+            let to_delete: Vec<&Trigger> = triggers
+                .iter()
+                .filter(|t| !kept_set.contains(format_trigger_for_display(t).as_str()))
+                .collect();
+
+            if to_delete.is_empty() {
+                println!("No triggers selected for deletion.");
+                return Ok(());
+            }
+
+            // Show summary
+            println!("\nTriggers to DELETE ({}):", to_delete.len());
+            for trigger in &to_delete {
+                println!("  - {}", format_trigger_for_display(trigger));
+            }
+
+            // Dry run mode
+            if dry_run {
+                println!("\n[DRY RUN] No triggers were deleted.");
+                return Ok(());
+            }
+
+            // Confirmation prompt
+            println!();
+            print!("Proceed with deletion? [y/N]: ");
+            std::io::Write::flush(&mut std::io::stdout())?;
+            let mut confirm_input = String::new();
+            std::io::stdin().read_line(&mut confirm_input)?;
+            if !confirm_input.trim().eq_ignore_ascii_case("y") {
+                println!("Deletion cancelled.");
+                return Ok(());
+            }
+
+            // Auto-backup before deletion
+            let backup_path = PathBuf::from(format!(
+                "hamalert-backup-before-bulk-delete-{}.json",
+                Local::now().format("%Y-%m-%d-%H%M%S")
+            ));
+            let backup_json = serde_json::to_string_pretty(&triggers)?;
+            fs::write(&backup_path, backup_json)?;
+            println!(
+                "Backed up {} triggers to {}",
+                triggers.len(),
+                backup_path.display()
+            );
+
+            // Delete the selected triggers
+            for trigger in &to_delete {
+                delete_trigger(&client, &trigger.id).await?;
+                println!("Deleted: {}", format_trigger_for_display(trigger));
+            }
+
+            println!(
+                "\nDeleted {} trigger(s). Kept {} trigger(s).",
+                to_delete.len(),
+                triggers.len() - to_delete.len()
+            );
         }
     }
 

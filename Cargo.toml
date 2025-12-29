@@ -12,3 +12,4 @@ tokio = { version = "1.0", features = ["full"] }
 toml = "0.8"
 dirs = "5.0"
 chrono = "0.4"
+inquire = "0.7"
