@@ -285,7 +285,6 @@ async fn add_trigger(
     Ok(())
 }
 
-#[allow(dead_code)]
 async fn delete_trigger(client: &Client, id: &str) -> Result<(), Box<dyn Error>> {
     let response = client
         .post("https://hamalert.org/ajax/trigger_delete")
@@ -300,7 +299,6 @@ async fn delete_trigger(client: &Client, id: &str) -> Result<(), Box<dyn Error>>
     Ok(())
 }
 
-#[allow(dead_code)]
 async fn create_trigger_from_backup(
     client: &Client,
     trigger: &Trigger,
@@ -431,11 +429,70 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 output_path.display()
             );
         }
-        Commands::Restore {
-            input: _,
-            no_dry_run: _,
-        } => {
-            unimplemented!("Restore command not yet implemented")
+        Commands::Restore { input, no_dry_run } => {
+            // Read and parse backup file
+            let backup_content = fs::read_to_string(&input)
+                .map_err(|e| format!("Failed to read backup file {}: {}", input.display(), e))?;
+            let backup_triggers: Vec<Trigger> = serde_json::from_str(&backup_content)
+                .map_err(|e| format!("Failed to parse backup file: {}", e))?;
+
+            // Fetch current triggers
+            let current_triggers = fetch_triggers(&client).await?;
+
+            if !no_dry_run {
+                println!("DRY RUN - No changes will be made\n");
+                println!(
+                    "This will DELETE {} existing triggers and restore {} triggers from backup.\n",
+                    current_triggers.len(),
+                    backup_triggers.len()
+                );
+                println!("Triggers to be restored:");
+                for trigger in &backup_triggers {
+                    let mode = trigger
+                        .conditions
+                        .get("mode")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("any");
+                    let callsign = trigger
+                        .conditions
+                        .get("callsign")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("?");
+                    println!("  [{}] {} - \"{}\"", mode, callsign, trigger.comment);
+                }
+                println!("\nRun with --no-dry-run to execute.");
+                return Ok(());
+            }
+
+            // Create auto-backup before destructive operation
+            let backup_path = PathBuf::from(format!(
+                "hamalert-backup-before-restore-{}.json",
+                Local::now().format("%Y-%m-%d-%H%M%S")
+            ));
+            let backup_json = serde_json::to_string_pretty(&current_triggers)?;
+            fs::write(&backup_path, backup_json)?;
+            println!(
+                "Backed up {} existing triggers to {}",
+                current_triggers.len(),
+                backup_path.display()
+            );
+
+            // Delete all existing triggers
+            for trigger in &current_triggers {
+                delete_trigger(&client, &trigger.id).await?;
+            }
+            println!("Deleted {} existing triggers", current_triggers.len());
+
+            // Restore from backup
+            for trigger in &backup_triggers {
+                create_trigger_from_backup(&client, trigger).await?;
+                println!("Restored trigger: {}", trigger.comment);
+            }
+            println!(
+                "\nRestored {} triggers from {}",
+                backup_triggers.len(),
+                input.display()
+            );
         }
     }
 
