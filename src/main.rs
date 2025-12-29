@@ -468,18 +468,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         cs, comment, action_strings, mode_string
                     );
                 }
-                println!("\nTotal: {} triggers", callsigns.len());
             } else {
-                for cs in callsigns {
-                    add_trigger(
-                        &client,
-                        &cs,
-                        &comment,
-                        action_strings.clone(),
-                        mode_string.clone(),
-                    )
-                    .await?;
-                }
+                let combined_callsigns = callsigns.join(",");
+                add_trigger(
+                    &client,
+                    &combined_callsigns,
+                    &comment,
+                    action_strings.clone(),
+                    mode_string.clone(),
+                )
+                .await?;
             }
         }
         Commands::Backup { output } => {
