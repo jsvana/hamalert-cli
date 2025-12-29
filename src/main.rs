@@ -239,6 +239,35 @@ struct Trigger {
     options: Option<serde_json::Value>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
+struct EditableTrigger {
+    conditions: serde_json::Value,
+    actions: Vec<String>,
+    comment: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    options: Option<serde_json::Value>,
+}
+
+#[allow(dead_code)]
+impl EditableTrigger {
+    fn from_trigger(trigger: &Trigger) -> Self {
+        Self {
+            conditions: trigger.conditions.clone(),
+            actions: trigger.actions.clone(),
+            comment: trigger.comment.clone(),
+            options: trigger.options.clone(),
+        }
+    }
+
+    fn apply_to_trigger(self, trigger: &mut Trigger) {
+        trigger.conditions = self.conditions;
+        trigger.actions = self.actions;
+        trigger.comment = self.comment;
+        trigger.options = self.options;
+    }
+}
+
 #[allow(dead_code)]
 fn format_trigger_for_display(trigger: &Trigger) -> String {
     let mode = trigger
