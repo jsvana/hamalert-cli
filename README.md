@@ -46,17 +46,17 @@ You can specify a different configuration file location using the `--config-file
 hamalert-cli --config-file /path/to/config.toml <command>
 ```
 
-## Usage
+## Commands
 
-### Add a Trigger
+### add-trigger
 
-Add callsign triggers with specified actions. You can add multiple callsigns in a single command, and each will receive its own trigger via a separate API call:
+Add callsign triggers with specified actions. Multiple callsigns create a single trigger with comma-separated callsigns:
 
 ```bash
 hamalert-cli add-trigger \
   --callsign W1AW \
-  --comment "Monitor W1AW activity" \
-  --actions url \
+  --callsign K3LR \
+  --comment "Monitor activity" \
   --actions app
 ```
 
@@ -67,19 +67,77 @@ hamalert-cli add-trigger \
 - `threema` - Threema messenger notification
 - `telnet` - Telnet cluster notification
 
-You can specify multiple actions by repeating the `--actions` flag.
-
 #### Available Modes
 
-You can optionally specify a mode to filter alerts by transmission mode:
+Optionally filter by transmission mode:
 
 - `cw` - CW (Morse code)
 - `ft8` - FT8 digital mode
 - `ssb` - SSB (Single Side Band)
 
-The `--mode` parameter is optional. If not specified, alerts will trigger for all modes.
+### import-polo-notes
 
-### Examples
+Import callsigns from a Ham2K PoLo notes file:
+
+```bash
+hamalert-cli import-polo-notes \
+  --url https://example.com/callsigns.txt \
+  --comment "PoLo imports" \
+  --actions app \
+  --dry-run  # Preview without creating triggers
+```
+
+### backup
+
+Export all triggers to a JSON file:
+
+```bash
+hamalert-cli backup
+# Creates: hamalert-backup-YYYY-MM-DD.json
+
+hamalert-cli backup --output my-triggers.json
+```
+
+### restore
+
+Restore triggers from a backup file. Dry-run by default for safety:
+
+```bash
+# Preview what would happen
+hamalert-cli restore --input hamalert-backup-2025-01-15.json
+
+# Actually restore (creates auto-backup first, then replaces all triggers)
+hamalert-cli restore --input hamalert-backup-2025-01-15.json --no-dry-run
+```
+
+### edit
+
+Interactively edit an existing trigger using your `$EDITOR`:
+
+```bash
+hamalert-cli edit
+# Shows numbered list of triggers
+# Opens selected trigger in your editor
+# Saves changes back to HamAlert
+```
+
+### bulk-delete
+
+Interactively delete multiple triggers with a TUI multi-select interface:
+
+```bash
+hamalert-cli bulk-delete
+# Navigate: j/k or arrows
+# Toggle: Space (unchecked = will be deleted)
+# Confirm: Enter
+# Cancel: Esc
+
+hamalert-cli bulk-delete --dry-run  # Preview without deleting
+```
+
+All triggers start checked (kept). Uncheck the ones you want to delete. An auto-backup is created before deletion.
+
+## Examples
 
 Monitor a specific callsign with app notifications:
 
@@ -87,7 +145,7 @@ Monitor a specific callsign with app notifications:
 hamalert-cli add-trigger --callsign K3LR --comment "K3LR spotted" --actions app
 ```
 
-Add multiple callsigns at once (each gets its own trigger):
+Add multiple callsigns (creates one trigger with comma-separated callsigns):
 
 ```bash
 hamalert-cli add-trigger \
@@ -108,16 +166,17 @@ hamalert-cli add-trigger \
   --mode ft8
 ```
 
-Monitor multiple callsigns for CW mode with multiple notification methods:
+Backup, clean up, and restore workflow:
 
 ```bash
-hamalert-cli add-trigger \
-  --callsign W1AW \
-  --callsign K3LR \
-  --comment "CW operators" \
-  --actions url \
-  --actions app \
-  --mode cw
+# Backup current triggers
+hamalert-cli backup
+
+# Interactively delete unwanted triggers
+hamalert-cli bulk-delete
+
+# If something went wrong, restore from backup
+hamalert-cli restore --input hamalert-backup-2025-01-15.json --no-dry-run
 ```
 
 ## License
