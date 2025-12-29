@@ -518,17 +518,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 );
                 println!("Triggers to be restored:");
                 for trigger in &backup_triggers {
-                    let mode = trigger
-                        .conditions
-                        .get("mode")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("any");
-                    let callsign = trigger
-                        .conditions
-                        .get("callsign")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("?");
-                    println!("  [{}] {} - \"{}\"", mode, callsign, trigger.comment);
+                    println!("  {}", format_trigger_for_display(trigger));
                 }
                 println!("\nRun with --no-dry-run to execute.");
                 return Ok(());
