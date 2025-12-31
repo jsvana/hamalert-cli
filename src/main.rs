@@ -1181,21 +1181,33 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 let profile_path = profiles_dir()?.join(format!("{}.json", name));
                 if profile_path.exists() {
                     let existing = load_profile(&name)?;
-                    if existing != profile_triggers {
-                        println!("Profile '{}' already exists with different content.", name);
+                    if existing == profile_triggers {
+                        // Identical content - no need to re-save
                         println!(
-                            "Existing: {} triggers, New: {} triggers",
-                            existing.len(),
-                            profile_triggers.len()
+                            "Profile '{}' already has identical content. No changes needed.",
+                            name
                         );
-                        print!("Overwrite? [y/N]: ");
-                        std::io::Write::flush(&mut std::io::stdout())?;
-                        let mut confirm = String::new();
-                        std::io::stdin().read_line(&mut confirm)?;
-                        if !confirm.trim().eq_ignore_ascii_case("y") {
-                            println!("Cancelled.");
-                            return Ok(());
+                        // Still set as current profile if saving from live state
+                        if from_backup.is_none() {
+                            save_current_profile_name(&name)?;
+                            println!("Set '{}' as current profile.", name);
                         }
+                        return Ok(());
+                    }
+                    // Different content - prompt for confirmation
+                    println!("Profile '{}' already exists with different content.", name);
+                    println!(
+                        "Existing: {} triggers, New: {} triggers",
+                        existing.len(),
+                        profile_triggers.len()
+                    );
+                    print!("Overwrite? [y/N]: ");
+                    std::io::Write::flush(&mut std::io::stdout())?;
+                    let mut confirm = String::new();
+                    std::io::stdin().read_line(&mut confirm)?;
+                    if !confirm.trim().eq_ignore_ascii_case("y") {
+                        println!("Cancelled.");
+                        return Ok(());
                     }
                 }
 
