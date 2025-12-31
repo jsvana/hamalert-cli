@@ -77,7 +77,7 @@ Optionally filter by transmission mode:
 
 ### import-polo-notes
 
-Import callsigns from a Ham2K PoLo notes file:
+Import callsigns from a Ham2K PoLo notes file hosted at a URL:
 
 ```bash
 hamalert-cli import-polo-notes \
@@ -85,6 +85,39 @@ hamalert-cli import-polo-notes \
   --comment "PoLo imports" \
   --actions app \
   --dry-run  # Preview without creating triggers
+```
+
+### import-file
+
+Import callsigns from a local text file:
+
+```bash
+hamalert-cli import-file \
+  --file callsigns.txt \
+  --comment "Local imports" \
+  --actions app \
+  --dry-run  # Preview without creating triggers
+```
+
+#### File Format
+
+One callsign per line. Additional text after the callsign is ignored (useful for notes):
+
+```
+W1AW
+K3LR friend from contest
+N0CALL met at hamfest
+```
+
+Empty lines, lines starting with `#`, and lines starting with `//` are skipped:
+
+```
+# Friends list
+W1AW
+K3LR
+
+// DX stations
+VP8LP
 ```
 
 ### backup

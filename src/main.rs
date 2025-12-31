@@ -25,55 +25,65 @@ struct Cli {
     command: Commands,
 }
 
+/// Shared options for trigger creation
+#[derive(Parser, Clone)]
+struct TriggerOptions {
+    #[arg(long)]
+    comment: String,
+
+    #[arg(long, value_enum)]
+    actions: Vec<Action>,
+
+    #[arg(long, value_enum)]
+    mode: Option<Mode>,
+
+    /// Use compact format (comma-only, no spaces) for callsigns
+    #[arg(long, conflicts_with = "one_per_line")]
+    compact: bool,
+
+    /// Send callsigns one per line instead of comma-separated
+    #[arg(long, conflicts_with = "compact")]
+    one_per_line: bool,
+}
+
+/// Shared options for import commands
+#[derive(Parser, Clone)]
+struct ImportOptions {
+    #[command(flatten)]
+    trigger: TriggerOptions,
+
+    /// Show what would be added without actually adding triggers
+    #[arg(long)]
+    dry_run: bool,
+}
+
 #[derive(Subcommand)]
 enum Commands {
+    /// Add a trigger for one or more callsigns
     AddTrigger {
         #[arg(long)]
         callsign: Vec<String>,
 
-        #[arg(long)]
-        comment: String,
-
-        #[arg(long, value_enum)]
-        actions: Vec<Action>,
-
-        #[arg(long, value_enum)]
-        mode: Option<Mode>,
-
-        /// Use compact format (comma-only, no spaces) for callsigns
-        #[arg(long, conflicts_with = "one_per_line")]
-        compact: bool,
-
-        /// Send callsigns one per line instead of comma-separated
-        #[arg(long, conflicts_with = "compact")]
-        one_per_line: bool,
+        #[command(flatten)]
+        options: TriggerOptions,
     },
-    /// Add triggers for all callsigns in a Ham2K PoLo callsign notes file
+    /// Add triggers for all callsigns in a Ham2K PoLo callsign notes file (fetched from URL)
     ImportPoloNotes {
         /// URL to the Ham2K PoLo callsign notes file
         #[arg(long)]
         url: String,
 
+        #[command(flatten)]
+        options: ImportOptions,
+    },
+    /// Import callsigns from a local file (one callsign per line)
+    ImportFile {
+        /// Path to the callsign file
         #[arg(long)]
-        comment: String,
+        file: PathBuf,
 
-        #[arg(long, value_enum)]
-        actions: Vec<Action>,
-
-        #[arg(long, value_enum)]
-        mode: Option<Mode>,
-
-        /// Show what would be added without actually adding triggers
-        #[arg(long)]
-        dry_run: bool,
-
-        /// Use compact format (comma-only, no spaces) for callsigns
-        #[arg(long, conflicts_with = "one_per_line")]
-        compact: bool,
-
-        /// Send callsigns one per line instead of comma-separated
-        #[arg(long, conflicts_with = "compact")]
-        one_per_line: bool,
+        #[command(flatten)]
+        options: ImportOptions,
     },
     /// Backup all triggers to a JSON file
     Backup {
@@ -700,6 +710,49 @@ async fn update_trigger(client: &Client, trigger: &Trigger) -> Result<(), Box<dy
     Ok(())
 }
 
+/// Shared logic for importing callsigns from any source
+async fn import_callsigns(
+    client: &Client,
+    callsigns: Vec<String>,
+    options: &ImportOptions,
+) -> Result<(), Box<dyn Error>> {
+    let action_strings: Vec<String> = options
+        .trigger
+        .actions
+        .iter()
+        .map(|a| a.as_str().to_string())
+        .collect();
+
+    let mode_string = options
+        .trigger
+        .mode
+        .as_ref()
+        .map(|m| m.as_str().to_string());
+    let format = CallsignFormat::from_flags(options.trigger.compact, options.trigger.one_per_line);
+
+    if options.dry_run {
+        println!("\nDry run - would add triggers for:");
+        for cs in &callsigns {
+            println!(
+                "  {} (comment: {:?}, actions: {:?}, mode: {:?})",
+                cs, options.trigger.comment, action_strings, mode_string
+            );
+        }
+    } else {
+        let combined_callsigns = callsigns.join(format.separator());
+        add_trigger(
+            client,
+            &combined_callsigns,
+            &options.trigger.comment,
+            action_strings,
+            mode_string,
+        )
+        .await?;
+    }
+
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let cli = Cli::parse();
@@ -715,43 +768,31 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     // Execute the subcommand
     match cli.command {
-        Commands::AddTrigger {
-            callsign,
-            comment,
-            actions,
-            mode,
-            compact,
-            one_per_line,
-        } => {
-            let action_strings: Vec<String> =
-                actions.iter().map(|a| a.as_str().to_string()).collect();
+        Commands::AddTrigger { callsign, options } => {
+            let action_strings: Vec<String> = options
+                .actions
+                .iter()
+                .map(|a| a.as_str().to_string())
+                .collect();
 
-            let mode_string = mode.as_ref().map(|m| m.as_str().to_string());
+            let mode_string = options.mode.as_ref().map(|m| m.as_str().to_string());
 
             if callsign.is_empty() {
                 return Err("At least one --callsign must be provided".into());
             }
             // Join callsigns with the specified format
-            let format = CallsignFormat::from_flags(compact, one_per_line);
+            let format = CallsignFormat::from_flags(options.compact, options.one_per_line);
             let combined_callsigns = callsign.join(format.separator());
             add_trigger(
                 &client,
                 &combined_callsigns,
-                &comment,
+                &options.comment,
                 action_strings,
                 mode_string,
             )
             .await?;
         }
-        Commands::ImportPoloNotes {
-            url,
-            comment,
-            actions,
-            mode,
-            dry_run,
-            compact,
-            one_per_line,
-        } => {
+        Commands::ImportPoloNotes { url, options } => {
             let callsigns = fetch_polo_notes(&client, &url).await?;
 
             if callsigns.is_empty() {
@@ -761,31 +802,21 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
             println!("Found {} callsigns at {}", callsigns.len(), url);
 
-            let action_strings: Vec<String> =
-                actions.iter().map(|a| a.as_str().to_string()).collect();
+            import_callsigns(&client, callsigns, &options).await?;
+        }
+        Commands::ImportFile { file, options } => {
+            let content = fs::read_to_string(&file)
+                .map_err(|e| format!("Failed to read file {}: {}", file.display(), e))?;
+            let callsigns = parse_polo_notes_content(&content);
 
-            let mode_string = mode.as_ref().map(|m| m.as_str().to_string());
-            let format = CallsignFormat::from_flags(compact, one_per_line);
-
-            if dry_run {
-                println!("\nDry run - would add triggers for:");
-                for cs in &callsigns {
-                    println!(
-                        "  {} (comment: {:?}, actions: {:?}, mode: {:?})",
-                        cs, comment, action_strings, mode_string
-                    );
-                }
-            } else {
-                let combined_callsigns = callsigns.join(format.separator());
-                add_trigger(
-                    &client,
-                    &combined_callsigns,
-                    &comment,
-                    action_strings.clone(),
-                    mode_string.clone(),
-                )
-                .await?;
+            if callsigns.is_empty() {
+                println!("No callsigns found in {}", file.display());
+                return Ok(());
             }
+
+            println!("Found {} callsigns in {}", callsigns.len(), file.display());
+
+            import_callsigns(&client, callsigns, &options).await?;
         }
         Commands::Backup { output } => {
             let triggers = fetch_triggers(&client).await?;
