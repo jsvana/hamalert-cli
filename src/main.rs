@@ -1152,7 +1152,152 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 }
             }
             ProfileCommands::Status => {
-                println!("profile status - not yet implemented");
+                let current_triggers = fetch_triggers(&client).await?;
+                let permanent = load_permanent_triggers()?;
+                let current_profile_name = load_current_profile_name()?;
+                let profiles = list_profiles()?;
+
+                let current_stored: Vec<StoredTrigger> = current_triggers
+                    .iter()
+                    .map(StoredTrigger::from_trigger)
+                    .collect();
+
+                // Count permanent matches
+                let permanent_matched = current_stored
+                    .iter()
+                    .filter(|t| permanent.iter().any(|p| triggers_match(t, p)))
+                    .count();
+
+                println!("Current triggers on HamAlert: {}", current_triggers.len());
+                println!(
+                    "Permanent triggers matched: {}/{}",
+                    permanent_matched,
+                    permanent.len()
+                );
+
+                let current_non_permanent = filter_out_permanent(&current_stored, &permanent);
+
+                if profiles.is_empty() {
+                    println!("\nNo profiles saved.");
+                    return Ok(());
+                }
+
+                println!("\nProfile match analysis:");
+                let mut best_match: Option<(String, usize, usize)> = None;
+
+                for profile_name in &profiles {
+                    let profile = load_profile(profile_name).unwrap_or_default();
+                    let (matched, total) =
+                        calculate_profile_match(&current_non_permanent, &profile);
+                    let percentage = if total > 0 {
+                        (matched * 100) / total
+                    } else {
+                        100
+                    };
+
+                    let marker = if matched == total && total > 0 {
+                        " <- best match"
+                    } else {
+                        ""
+                    };
+                    println!(
+                        "  {:<15} {}/{} ({}% match){}",
+                        profile_name, matched, total, percentage, marker
+                    );
+
+                    if best_match.is_none() || matched > best_match.as_ref().unwrap().1 {
+                        best_match = Some((profile_name.clone(), matched, total));
+                    }
+                }
+
+                // Current profile status
+                println!(
+                    "\nRecorded current profile: {}",
+                    current_profile_name.as_deref().unwrap_or("(none)")
+                );
+
+                // Check for mismatch
+                if let Some((best_name, best_matched, best_total)) = &best_match {
+                    let is_in_sync = current_profile_name.as_ref() == Some(best_name)
+                        && *best_matched == *best_total;
+
+                    if is_in_sync {
+                        println!("Status: ✓ In sync");
+                    } else if current_profile_name.is_some()
+                        && best_matched == best_total
+                        && *best_total > 0
+                    {
+                        println!(
+                            "Status: ⚠ Mismatch - HamAlert matches '{}' better",
+                            best_name
+                        );
+                        println!("\nActions:");
+                        println!(
+                            "  [U]pdate record to '{}' (no changes to HamAlert)",
+                            best_name
+                        );
+                        println!("  [S]ave current triggers as new profile");
+                        println!("  [I]gnore");
+
+                        print!("\nChoice: ");
+                        std::io::Write::flush(&mut std::io::stdout())?;
+                        let mut choice = String::new();
+                        std::io::stdin().read_line(&mut choice)?;
+
+                        match choice.trim().to_lowercase().as_str() {
+                            "u" => {
+                                save_current_profile_name(best_name)?;
+                                println!("Updated current profile record to '{}'.", best_name);
+                            }
+                            "s" => {
+                                print!("Enter profile name: ");
+                                std::io::Write::flush(&mut std::io::stdout())?;
+                                let mut new_name = String::new();
+                                std::io::stdin().read_line(&mut new_name)?;
+                                let new_name = new_name.trim();
+                                if !new_name.is_empty() {
+                                    let profile_triggers =
+                                        filter_out_permanent(&current_stored, &permanent);
+                                    save_profile(new_name, &profile_triggers)?;
+                                    save_current_profile_name(new_name)?;
+                                    println!("Saved and set '{}' as current profile.", new_name);
+                                }
+                            }
+                            _ => {
+                                println!("No changes made.");
+                            }
+                        }
+                    } else {
+                        println!("Status: No exact profile match");
+                    }
+                }
+
+                // Show unexpected triggers
+                let current_profile_data = current_profile_name
+                    .as_ref()
+                    .and_then(|n| load_profile(n).ok());
+                let unexpected = find_unexpected_triggers(
+                    &current_stored,
+                    &permanent,
+                    current_profile_data.as_deref(),
+                );
+
+                if !unexpected.is_empty() {
+                    println!("\nUnmatched triggers ({}):", unexpected.len());
+                    for t in &unexpected {
+                        let mode = t
+                            .conditions
+                            .get("mode")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("any");
+                        let callsign = t
+                            .conditions
+                            .get("callsign")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("?");
+                        println!("  - [{}] {} - \"{}\"", mode, callsign, t.comment);
+                    }
+                }
             }
             ProfileCommands::Save { name, from_backup } => {
                 let permanent = load_permanent_triggers()?;
