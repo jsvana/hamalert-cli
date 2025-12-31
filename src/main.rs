@@ -192,6 +192,34 @@ fn backup_dir() -> Result<PathBuf, Box<dyn Error>> {
     Ok(data_dir)
 }
 
+#[allow(dead_code)]
+fn profiles_dir() -> Result<PathBuf, Box<dyn Error>> {
+    let dir = dirs::data_dir()
+        .ok_or("Could not determine data directory")?
+        .join("hamalert")
+        .join("profiles");
+    fs::create_dir_all(&dir)?;
+    Ok(dir)
+}
+
+#[allow(dead_code)]
+fn permanent_triggers_path() -> Result<PathBuf, Box<dyn Error>> {
+    let path = dirs::data_dir()
+        .ok_or("Could not determine data directory")?
+        .join("hamalert")
+        .join("permanent.json");
+    Ok(path)
+}
+
+#[allow(dead_code)]
+fn current_profile_path() -> Result<PathBuf, Box<dyn Error>> {
+    let path = dirs::data_dir()
+        .ok_or("Could not determine data directory")?
+        .join("hamalert")
+        .join("current-profile");
+    Ok(path)
+}
+
 fn load_config(config_file: Option<PathBuf>) -> Result<Config, Box<dyn Error>> {
     let config_path = if let Some(path) = config_file {
         path
@@ -1012,5 +1040,24 @@ mod tests {
             options: None,
         };
         assert!(triggers_match(&t1, &t2));
+    }
+
+    #[test]
+    fn test_profiles_dir_is_under_data_dir() {
+        let dir = profiles_dir().unwrap();
+        assert!(dir.to_string_lossy().contains("hamalert"));
+        assert!(dir.to_string_lossy().contains("profiles"));
+    }
+
+    #[test]
+    fn test_permanent_triggers_path_is_json() {
+        let path = permanent_triggers_path().unwrap();
+        assert!(path.to_string_lossy().ends_with("permanent.json"));
+    }
+
+    #[test]
+    fn test_current_profile_path_exists() {
+        let path = current_profile_path().unwrap();
+        assert!(path.to_string_lossy().contains("current-profile"));
     }
 }
