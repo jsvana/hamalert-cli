@@ -1057,7 +1057,78 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
         Commands::Profile(profile_cmd) => match profile_cmd {
             ProfileCommands::List => {
-                println!("profile list - not yet implemented");
+                let profiles = list_profiles()?;
+                let current_profile = load_current_profile_name()?;
+                let permanent = load_permanent_triggers()?;
+
+                if profiles.is_empty() {
+                    println!("No profiles saved.");
+                    println!("\nUse 'hamalert-cli profile save <name>' to create one.");
+                    return Ok(());
+                }
+
+                // Fetch current triggers to calculate match percentages
+                let current_triggers = fetch_triggers(&client).await?;
+                let current_stored: Vec<StoredTrigger> = current_triggers
+                    .iter()
+                    .map(StoredTrigger::from_trigger)
+                    .collect();
+
+                // Filter out permanent triggers for matching
+                let current_non_permanent = filter_out_permanent(&current_stored, &permanent);
+
+                println!("Profiles:");
+                let mut best_match: Option<(&str, usize, usize)> = None;
+
+                for profile_name in &profiles {
+                    let profile = load_profile(profile_name).unwrap_or_default();
+                    let (matched, total) =
+                        calculate_profile_match(&current_non_permanent, &profile);
+                    let percentage = if total > 0 {
+                        (matched * 100) / total
+                    } else {
+                        100
+                    };
+
+                    let is_current = current_profile.as_ref() == Some(profile_name);
+                    let marker = if is_current { "*" } else { " " };
+
+                    println!(
+                        "  {} {:<15} ({}/{}  {}% match){}",
+                        marker,
+                        profile_name,
+                        matched,
+                        total,
+                        percentage,
+                        if is_current { " <- current" } else { "" }
+                    );
+
+                    // Track best match
+                    if best_match.is_none() || matched > best_match.unwrap().1 {
+                        best_match = Some((profile_name, matched, total));
+                    }
+                }
+
+                // Warn if recorded profile doesn't match best
+                if let Some(current) = &current_profile
+                    && let Some((best_name, best_matched, best_total)) = best_match
+                    && best_name != current
+                    && best_matched == best_total
+                    && best_total > 0
+                {
+                    let current_profile_data = load_profile(current).unwrap_or_default();
+                    let (current_matched, current_total) =
+                        calculate_profile_match(&current_non_permanent, &current_profile_data);
+                    if current_matched < current_total {
+                        println!(
+                            "\n⚠ Current triggers match '{}' better than recorded '{}'",
+                            best_name, current
+                        );
+                        println!("Run 'profile status' for details.");
+                    }
+                }
+
+                println!("\nPermanent triggers: {}", permanent.len());
             }
             ProfileCommands::Show { name } => {
                 let profile = load_profile(&name)?;
