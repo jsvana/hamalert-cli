@@ -220,6 +220,99 @@ fn current_profile_path() -> Result<PathBuf, Box<dyn Error>> {
     Ok(path)
 }
 
+#[allow(dead_code)]
+fn load_profile(name: &str) -> Result<Vec<StoredTrigger>, Box<dyn Error>> {
+    let path = profiles_dir()?.join(format!("{}.json", name));
+    let content =
+        fs::read_to_string(&path).map_err(|e| format!("Profile '{}' not found: {}", name, e))?;
+    let triggers: Vec<StoredTrigger> = serde_json::from_str(&content)
+        .map_err(|e| format!("Failed to parse profile '{}': {}", name, e))?;
+    Ok(triggers)
+}
+
+#[allow(dead_code)]
+fn save_profile(name: &str, triggers: &[StoredTrigger]) -> Result<PathBuf, Box<dyn Error>> {
+    let path = profiles_dir()?.join(format!("{}.json", name));
+    let json = serde_json::to_string_pretty(triggers)?;
+    fs::write(&path, json)?;
+    Ok(path)
+}
+
+#[allow(dead_code)]
+fn load_permanent_triggers() -> Result<Vec<StoredTrigger>, Box<dyn Error>> {
+    let path = permanent_triggers_path()?;
+    if !path.exists() {
+        return Ok(vec![]);
+    }
+    let content = fs::read_to_string(&path)?;
+    let triggers: Vec<StoredTrigger> = serde_json::from_str(&content)?;
+    Ok(triggers)
+}
+
+#[allow(dead_code)]
+fn save_permanent_triggers(triggers: &[StoredTrigger]) -> Result<(), Box<dyn Error>> {
+    let path = permanent_triggers_path()?;
+    // Ensure parent directory exists
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let json = serde_json::to_string_pretty(triggers)?;
+    fs::write(&path, json)?;
+    Ok(())
+}
+
+#[allow(dead_code)]
+fn load_current_profile_name() -> Result<Option<String>, Box<dyn Error>> {
+    let path = current_profile_path()?;
+    if !path.exists() {
+        return Ok(None);
+    }
+    let name = fs::read_to_string(&path)?.trim().to_string();
+    if name.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(name))
+}
+
+#[allow(dead_code)]
+fn save_current_profile_name(name: &str) -> Result<(), Box<dyn Error>> {
+    let path = current_profile_path()?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(&path, name)?;
+    Ok(())
+}
+
+#[allow(dead_code)]
+fn list_profiles() -> Result<Vec<String>, Box<dyn Error>> {
+    let dir = profiles_dir()?;
+    let mut profiles = vec![];
+    if dir.exists() {
+        for entry in fs::read_dir(&dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.extension().map(|e| e == "json").unwrap_or(false)
+                && let Some(stem) = path.file_stem()
+            {
+                profiles.push(stem.to_string_lossy().to_string());
+            }
+        }
+    }
+    profiles.sort();
+    Ok(profiles)
+}
+
+#[allow(dead_code)]
+fn delete_profile(name: &str) -> Result<(), Box<dyn Error>> {
+    let path = profiles_dir()?.join(format!("{}.json", name));
+    if !path.exists() {
+        return Err(format!("Profile '{}' not found", name).into());
+    }
+    fs::remove_file(&path)?;
+    Ok(())
+}
+
 fn load_config(config_file: Option<PathBuf>) -> Result<Config, Box<dyn Error>> {
     let config_path = if let Some(path) = config_file {
         path
@@ -1059,5 +1152,11 @@ mod tests {
     fn test_current_profile_path_exists() {
         let path = current_profile_path().unwrap();
         assert!(path.to_string_lossy().contains("current-profile"));
+    }
+
+    #[test]
+    fn test_load_profile_not_found() {
+        let result = load_profile("nonexistent_profile_xyz");
+        assert!(result.is_err());
     }
 }
