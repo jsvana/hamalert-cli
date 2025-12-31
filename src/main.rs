@@ -1370,11 +1370,202 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     println!("Set '{}' as current profile.", name);
                 }
             }
-            ProfileCommands::Switch {
-                name,
-                no_dry_run: _,
-            } => {
-                println!("profile switch {} - not yet implemented", name);
+            ProfileCommands::Switch { name, no_dry_run } => {
+                // Load all data
+                let target_profile = load_profile(&name)?;
+                let permanent = load_permanent_triggers()?;
+                let current_profile_name = load_current_profile_name()?;
+                let current_triggers = fetch_triggers(&client).await?;
+
+                let current_stored: Vec<StoredTrigger> = current_triggers
+                    .iter()
+                    .map(StoredTrigger::from_trigger)
+                    .collect();
+
+                // Categorize current triggers
+                let permanent_triggers: Vec<&StoredTrigger> = current_stored
+                    .iter()
+                    .filter(|t| permanent.iter().any(|p| triggers_match(t, p)))
+                    .collect();
+
+                let current_profile_data = current_profile_name
+                    .as_ref()
+                    .and_then(|n| load_profile(n).ok());
+
+                let unexpected = find_unexpected_triggers(
+                    &current_stored,
+                    &permanent,
+                    current_profile_data.as_deref(),
+                );
+
+                // Triggers to delete (non-permanent current triggers)
+                let to_delete: Vec<&Trigger> = current_triggers
+                    .iter()
+                    .filter(|t| {
+                        let stored = StoredTrigger::from_trigger(t);
+                        !permanent.iter().any(|p| triggers_match(&stored, p))
+                    })
+                    .collect();
+
+                // Display plan
+                println!(
+                    "Current profile: {}",
+                    current_profile_name.as_deref().unwrap_or("(none)")
+                );
+                println!("Switching to: {}\n", name);
+
+                println!(
+                    "Permanent triggers (unchanged): {}",
+                    permanent_triggers.len()
+                );
+                if !permanent_triggers.is_empty() {
+                    for t in &permanent_triggers {
+                        let mode = t
+                            .conditions
+                            .get("mode")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("any");
+                        let callsign = t
+                            .conditions
+                            .get("callsign")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("?");
+                        println!("  - [{}] {} - \"{}\"", mode, callsign, t.comment);
+                    }
+                }
+
+                println!("\nWill DELETE {} triggers:", to_delete.len());
+                for t in &to_delete {
+                    println!("  - {}", format_trigger_for_display(t));
+                }
+
+                println!(
+                    "\nWill CREATE {} triggers from '{}':",
+                    target_profile.len(),
+                    name
+                );
+                for t in &target_profile {
+                    let mode = t
+                        .conditions
+                        .get("mode")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("any");
+                    let callsign = t
+                        .conditions
+                        .get("callsign")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("?");
+                    println!("  - [{}] {} - \"{}\"", mode, callsign, t.comment);
+                }
+
+                // Handle unexpected triggers
+                if !unexpected.is_empty() {
+                    println!(
+                        "\n⚠ Found {} unexpected triggers (not permanent, not in current profile):",
+                        unexpected.len()
+                    );
+                    for t in &unexpected {
+                        let mode = t
+                            .conditions
+                            .get("mode")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("any");
+                        let callsign = t
+                            .conditions
+                            .get("callsign")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("?");
+                        println!("  - [{}] {} - \"{}\"", mode, callsign, t.comment);
+                    }
+
+                    if !no_dry_run {
+                        println!("\n  [D]elete them");
+                        if let Some(ref current_name) = current_profile_name {
+                            println!("  [S]ave to '{}' profile first", current_name);
+                        }
+                        println!("  [C]ancel");
+
+                        print!("\nChoice: ");
+                        std::io::Write::flush(&mut std::io::stdout())?;
+                        let mut choice = String::new();
+                        std::io::stdin().read_line(&mut choice)?;
+
+                        match choice.trim().to_lowercase().as_str() {
+                            "d" => {
+                                // Continue with deletion
+                            }
+                            "s" => {
+                                if let Some(ref current_name) = current_profile_name {
+                                    // Update current profile to include unexpected triggers
+                                    let mut updated_profile =
+                                        current_profile_data.unwrap_or_default();
+                                    for t in &unexpected {
+                                        if !updated_profile.iter().any(|p| triggers_match(p, t)) {
+                                            updated_profile.push(t.clone());
+                                        }
+                                    }
+                                    save_profile(current_name, &updated_profile)?;
+                                    println!(
+                                        "Updated '{}' profile with {} additional triggers.",
+                                        current_name,
+                                        unexpected.len()
+                                    );
+                                }
+                            }
+                            _ => {
+                                println!("Cancelled.");
+                                return Ok(());
+                            }
+                        }
+                    }
+                }
+
+                if !no_dry_run {
+                    println!("\nDRY RUN - No changes made.");
+                    println!("Run with --no-dry-run to execute.");
+                    return Ok(());
+                }
+
+                // Execute the switch
+                // 1. Create backup
+                let backup_path = backup_dir()?.join(format!(
+                    "hamalert-backup-before-switch-{}.json",
+                    Local::now().format("%Y-%m-%d-%H%M%S")
+                ));
+                let backup_json = serde_json::to_string_pretty(&current_triggers)?;
+                fs::write(&backup_path, backup_json)?;
+                println!(
+                    "\nBacked up {} triggers to {}",
+                    current_triggers.len(),
+                    backup_path.display()
+                );
+
+                // 2. Delete non-permanent triggers
+                for trigger in &to_delete {
+                    delete_trigger(&client, &trigger.id).await?;
+                }
+                println!("Deleted {} triggers.", to_delete.len());
+
+                // 3. Create triggers from target profile
+                for stored in &target_profile {
+                    // Convert StoredTrigger to Trigger for API
+                    let trigger = Trigger {
+                        id: String::new(),
+                        user_id: None,
+                        conditions: stored.conditions.clone(),
+                        actions: stored.actions.clone(),
+                        comment: stored.comment.clone(),
+                        match_count: None,
+                        disabled: None,
+                        options: stored.options.clone(),
+                    };
+                    create_trigger_from_backup(&client, &trigger).await?;
+                }
+                println!("Created {} triggers from '{}'.", target_profile.len(), name);
+
+                // 4. Update current profile
+                save_current_profile_name(&name)?;
+                println!("\nSwitched to profile '{}'.", name);
             }
             ProfileCommands::Delete { name } => {
                 // Check if it's the current profile
