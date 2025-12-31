@@ -1060,7 +1060,25 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 println!("profile list - not yet implemented");
             }
             ProfileCommands::Show { name } => {
-                println!("profile show {} - not yet implemented", name);
+                let profile = load_profile(&name)?;
+                if profile.is_empty() {
+                    println!("Profile '{}' is empty.", name);
+                } else {
+                    println!("Profile '{}' ({} triggers):", name, profile.len());
+                    for trigger in &profile {
+                        let mode = trigger
+                            .conditions
+                            .get("mode")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("any");
+                        let callsign = trigger
+                            .conditions
+                            .get("callsign")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("?");
+                        println!("  - [{}] {} - \"{}\"", mode, callsign, trigger.comment);
+                    }
+                }
             }
             ProfileCommands::Status => {
                 println!("profile status - not yet implemented");
