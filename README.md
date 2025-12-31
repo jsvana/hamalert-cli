@@ -137,6 +137,77 @@ hamalert-cli bulk-delete --dry-run  # Preview without deleting
 
 All triggers start checked (kept). Uncheck the ones you want to delete. An auto-backup is created before deletion.
 
+### profile
+
+Manage trigger profiles for different locations or activities.
+
+#### profile list
+
+Show all available profiles with match percentages:
+
+```bash
+hamalert-cli profile list
+```
+
+#### profile show
+
+Display triggers in a specific profile:
+
+```bash
+hamalert-cli profile show home
+```
+
+#### profile status
+
+Analyze current HamAlert triggers against saved profiles:
+
+```bash
+hamalert-cli profile status
+```
+
+#### profile save
+
+Save current triggers (excluding permanent ones) as a profile:
+
+```bash
+hamalert-cli profile save home
+hamalert-cli profile save portable --from-backup backup.json
+```
+
+#### profile switch
+
+Switch to a different profile (dry-run by default):
+
+```bash
+hamalert-cli profile switch portable           # Preview
+hamalert-cli profile switch portable --no-dry-run  # Execute
+```
+
+#### profile delete
+
+Remove a saved profile:
+
+```bash
+hamalert-cli profile delete old-profile
+```
+
+#### profile set-permanent
+
+Interactively select which triggers should be permanent (always active):
+
+```bash
+hamalert-cli profile set-permanent
+hamalert-cli profile set-permanent --from-backup backup.json
+```
+
+#### profile show-permanent
+
+Display current permanent triggers:
+
+```bash
+hamalert-cli profile show-permanent
+```
+
 ## Examples
 
 Monitor a specific callsign with app notifications:

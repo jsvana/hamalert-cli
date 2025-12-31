@@ -34,6 +34,9 @@ This is a single-file Rust application (`src/main.rs`) with ~420 lines. The mono
 - `add_trigger()`: POSTs trigger data to HamAlert API
 - `parse_polo_notes_content()`: Extracts callsigns from Ham2K PoLo format (well-tested)
 - `fetch_polo_notes()`: HTTP GET for remote PoLo notes files
+- Profile commands: Manage location/activity-based trigger sets (home, portable, contest, etc.)
+- Permanent triggers: Triggers that persist across all profile switches, stored in `~/.local/share/hamalert/permanent.json`
+- Profile storage: Saved profiles stored in `~/.local/share/hamalert/profiles/`
 
 **Data flow:**
 1. Parse CLI args → load config → login to HamAlert.org
