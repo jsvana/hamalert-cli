@@ -1080,8 +1080,77 @@ async fn main() -> Result<(), Box<dyn Error>> {
             ProfileCommands::Delete { name } => {
                 println!("profile delete {} - not yet implemented", name);
             }
-            ProfileCommands::SetPermanent { from_backup: _ } => {
-                println!("profile set-permanent - not yet implemented");
+            ProfileCommands::SetPermanent { from_backup } => {
+                // Load triggers from backup file or fetch from HamAlert
+                let triggers: Vec<Trigger> = match from_backup {
+                    Some(path) => {
+                        let content = fs::read_to_string(&path)
+                            .map_err(|e| format!("Failed to read backup file: {}", e))?;
+                        serde_json::from_str(&content)
+                            .map_err(|e| format!("Failed to parse backup file: {}", e))?
+                    }
+                    None => fetch_triggers(&client).await?,
+                };
+
+                if triggers.is_empty() {
+                    println!("No triggers found.");
+                    return Ok(());
+                }
+
+                // Load existing permanent triggers
+                let existing_permanent = load_permanent_triggers()?;
+
+                // Convert to StoredTrigger for comparison
+                let stored_triggers: Vec<StoredTrigger> =
+                    triggers.iter().map(StoredTrigger::from_trigger).collect();
+
+                // Build display items
+                let display_items: Vec<String> =
+                    triggers.iter().map(format_trigger_for_display).collect();
+
+                // Pre-select triggers that are already permanent
+                let default_selections: Vec<usize> = stored_triggers
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, t)| existing_permanent.iter().any(|p| triggers_match(t, p)))
+                    .map(|(i, _)| i)
+                    .collect();
+
+                println!(
+                    "Select triggers to mark as PERMANENT (always active across all profiles):\n"
+                );
+
+                let selected_result = MultiSelect::new(
+                    "Permanent triggers (checked = permanent):",
+                    display_items.clone(),
+                )
+                .with_default(&default_selections)
+                .with_vim_mode(true)
+                .with_page_size(15)
+                .with_help_message("Space=toggle, j/k=navigate, Enter=confirm, Esc=cancel")
+                .prompt();
+
+                let selected_displays: Vec<String> = match selected_result {
+                    Ok(selected) => selected,
+                    Err(InquireError::OperationCanceled)
+                    | Err(InquireError::OperationInterrupted) => {
+                        println!("Operation cancelled.");
+                        return Ok(());
+                    }
+                    Err(e) => return Err(e.into()),
+                };
+
+                // Find which triggers were selected
+                let selected_set: std::collections::HashSet<&str> =
+                    selected_displays.iter().map(|s| s.as_str()).collect();
+                let new_permanent: Vec<StoredTrigger> = triggers
+                    .iter()
+                    .filter(|t| selected_set.contains(format_trigger_for_display(t).as_str()))
+                    .map(StoredTrigger::from_trigger)
+                    .collect();
+
+                save_permanent_triggers(&new_permanent)?;
+                println!("\nSaved {} permanent triggers.", new_permanent.len());
             }
             ProfileCommands::ShowPermanent => {
                 let permanent = load_permanent_triggers()?;
