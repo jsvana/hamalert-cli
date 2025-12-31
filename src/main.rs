@@ -1084,7 +1084,28 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 println!("profile set-permanent - not yet implemented");
             }
             ProfileCommands::ShowPermanent => {
-                println!("profile show-permanent - not yet implemented");
+                let permanent = load_permanent_triggers()?;
+                if permanent.is_empty() {
+                    println!("No permanent triggers set.");
+                    println!(
+                        "\nUse 'hamalert-cli profile set-permanent' to select permanent triggers."
+                    );
+                } else {
+                    println!("Permanent triggers ({}):", permanent.len());
+                    for trigger in &permanent {
+                        let mode = trigger
+                            .conditions
+                            .get("mode")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("any");
+                        let callsign = trigger
+                            .conditions
+                            .get("callsign")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("?");
+                        println!("  - [{}] {} - \"{}\"", mode, callsign, trigger.comment);
+                    }
+                }
             }
         },
     }
