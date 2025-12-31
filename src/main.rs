@@ -1232,7 +1232,27 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 println!("profile switch {} - not yet implemented", name);
             }
             ProfileCommands::Delete { name } => {
-                println!("profile delete {} - not yet implemented", name);
+                // Check if it's the current profile
+                let current = load_current_profile_name()?;
+                if current.as_ref() == Some(&name) {
+                    println!("Warning: '{}' is the current profile.", name);
+                    print!("Delete anyway? [y/N]: ");
+                    std::io::Write::flush(&mut std::io::stdout())?;
+                    let mut confirm = String::new();
+                    std::io::stdin().read_line(&mut confirm)?;
+                    if !confirm.trim().eq_ignore_ascii_case("y") {
+                        println!("Cancelled.");
+                        return Ok(());
+                    }
+                    // Clear current profile
+                    let path = current_profile_path()?;
+                    if path.exists() {
+                        fs::remove_file(&path)?;
+                    }
+                }
+
+                delete_profile(&name)?;
+                println!("Deleted profile '{}'.", name);
             }
             ProfileCommands::SetPermanent { from_backup } => {
                 // Load triggers from backup file or fetch from HamAlert
