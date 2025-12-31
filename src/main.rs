@@ -1371,6 +1371,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 }
             }
             ProfileCommands::Switch { name, no_dry_run } => {
+                // Track whether we modified the profile during dry-run
+                let mut profile_modified = false;
+
                 // Load all data
                 let target_profile = load_profile(&name)?;
                 let permanent = load_permanent_triggers()?;
@@ -1510,6 +1513,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                         current_name,
                                         unexpected.len()
                                     );
+                                    profile_modified = true;
                                 }
                             }
                             _ => {
@@ -1521,8 +1525,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 }
 
                 if !no_dry_run {
-                    println!("\nDRY RUN - No changes made.");
-                    println!("Run with --no-dry-run to execute.");
+                    if profile_modified {
+                        println!("\nNote: Profile was updated with unexpected triggers.");
+                    }
+                    println!("DRY RUN - No trigger changes made on HamAlert.");
+                    println!("Run with --no-dry-run to execute the switch.");
                     return Ok(());
                 }
 
