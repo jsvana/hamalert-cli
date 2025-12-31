@@ -31,11 +31,13 @@ struct TriggerOptions {
     #[arg(long)]
     comment: String,
 
-    #[arg(long, value_enum)]
+    /// Notification actions (e.g., --actions app telnet)
+    #[arg(long, value_enum, num_args = 1..)]
     actions: Vec<Action>,
 
-    #[arg(long, value_enum)]
-    mode: Option<Mode>,
+    /// Filter by mode (e.g., --mode cw ft8)
+    #[arg(long, value_enum, num_args = 1..)]
+    mode: Vec<Mode>,
 
     /// Use compact format (comma-only, no spaces) for callsigns
     #[arg(long, conflicts_with = "one_per_line")]
@@ -723,11 +725,19 @@ async fn import_callsigns(
         .map(|a| a.as_str().to_string())
         .collect();
 
-    let mode_string = options
-        .trigger
-        .mode
-        .as_ref()
-        .map(|m| m.as_str().to_string());
+    let mode_string = if options.trigger.mode.is_empty() {
+        None
+    } else {
+        Some(
+            options
+                .trigger
+                .mode
+                .iter()
+                .map(|m| m.as_str())
+                .collect::<Vec<_>>()
+                .join(","),
+        )
+    };
     let format = CallsignFormat::from_flags(options.trigger.compact, options.trigger.one_per_line);
 
     if options.dry_run {
@@ -775,7 +785,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 .map(|a| a.as_str().to_string())
                 .collect();
 
-            let mode_string = options.mode.as_ref().map(|m| m.as_str().to_string());
+            let mode_string = if options.mode.is_empty() {
+                None
+            } else {
+                Some(
+                    options
+                        .mode
+                        .iter()
+                        .map(|m| m.as_str())
+                        .collect::<Vec<_>>()
+                        .join(","),
+                )
+            };
 
             if callsign.is_empty() {
                 return Err("At least one --callsign must be provided".into());
