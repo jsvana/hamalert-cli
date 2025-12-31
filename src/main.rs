@@ -99,6 +99,51 @@ enum Commands {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Manage trigger profiles for different locations/activities
+    #[command(subcommand)]
+    Profile(ProfileCommands),
+}
+
+#[derive(Subcommand)]
+enum ProfileCommands {
+    /// List all available profiles
+    List,
+    /// Show triggers in a profile
+    Show {
+        /// Profile name
+        name: String,
+    },
+    /// Show current profile status and match analysis
+    Status,
+    /// Save current triggers as a profile
+    Save {
+        /// Profile name
+        name: String,
+        /// Create from backup file instead of current triggers
+        #[arg(long)]
+        from_backup: Option<PathBuf>,
+    },
+    /// Switch to a different profile
+    Switch {
+        /// Profile name to switch to
+        name: String,
+        /// Actually perform the switch (default is dry-run)
+        #[arg(long)]
+        no_dry_run: bool,
+    },
+    /// Delete a profile
+    Delete {
+        /// Profile name
+        name: String,
+    },
+    /// Interactively select permanent triggers
+    SetPermanent {
+        /// Set from backup file instead of current triggers
+        #[arg(long)]
+        from_backup: Option<PathBuf>,
+    },
+    /// Show current permanent triggers
+    ShowPermanent,
 }
 
 #[derive(Clone, ValueEnum)]
@@ -1010,6 +1055,38 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 triggers.len() - to_delete.len()
             );
         }
+        Commands::Profile(profile_cmd) => match profile_cmd {
+            ProfileCommands::List => {
+                println!("profile list - not yet implemented");
+            }
+            ProfileCommands::Show { name } => {
+                println!("profile show {} - not yet implemented", name);
+            }
+            ProfileCommands::Status => {
+                println!("profile status - not yet implemented");
+            }
+            ProfileCommands::Save {
+                name,
+                from_backup: _,
+            } => {
+                println!("profile save {} - not yet implemented", name);
+            }
+            ProfileCommands::Switch {
+                name,
+                no_dry_run: _,
+            } => {
+                println!("profile switch {} - not yet implemented", name);
+            }
+            ProfileCommands::Delete { name } => {
+                println!("profile delete {} - not yet implemented", name);
+            }
+            ProfileCommands::SetPermanent { from_backup: _ } => {
+                println!("profile set-permanent - not yet implemented");
+            }
+            ProfileCommands::ShowPermanent => {
+                println!("profile show-permanent - not yet implemented");
+            }
+        },
     }
 
     Ok(())
