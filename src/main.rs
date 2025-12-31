@@ -328,6 +328,35 @@ impl EditableTrigger {
     }
 }
 
+/// Trigger data for storage in profile files (without runtime fields like _id)
+#[allow(dead_code)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+struct StoredTrigger {
+    conditions: serde_json::Value,
+    actions: Vec<String>,
+    comment: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    options: Option<serde_json::Value>,
+}
+
+impl StoredTrigger {
+    #[allow(dead_code)]
+    fn from_trigger(trigger: &Trigger) -> Self {
+        Self {
+            conditions: trigger.conditions.clone(),
+            actions: trigger.actions.clone(),
+            comment: trigger.comment.clone(),
+            options: trigger.options.clone(),
+        }
+    }
+}
+
+/// Check if two triggers match by conditions and comment (identity match)
+#[allow(dead_code)]
+fn triggers_match(a: &StoredTrigger, b: &StoredTrigger) -> bool {
+    a.conditions == b.conditions && a.comment == b.comment
+}
+
 fn format_trigger_for_display(trigger: &Trigger) -> String {
     let mode = trigger
         .conditions
@@ -915,5 +944,73 @@ mod tests {
         let content = "W1ABC note with #hashtag";
         let result = parse_polo_notes_content(content);
         assert_eq!(result, vec!["W1ABC"]);
+    }
+
+    #[test]
+    fn test_triggers_match_identical() {
+        let t1 = StoredTrigger {
+            conditions: serde_json::json!({"callsign": "W1ABC"}),
+            actions: vec!["app".to_string()],
+            comment: "Test trigger".to_string(),
+            options: None,
+        };
+        let t2 = StoredTrigger {
+            conditions: serde_json::json!({"callsign": "W1ABC"}),
+            actions: vec!["app".to_string()],
+            comment: "Test trigger".to_string(),
+            options: None,
+        };
+        assert!(triggers_match(&t1, &t2));
+    }
+
+    #[test]
+    fn test_triggers_match_different_callsign() {
+        let t1 = StoredTrigger {
+            conditions: serde_json::json!({"callsign": "W1ABC"}),
+            actions: vec!["app".to_string()],
+            comment: "Test trigger".to_string(),
+            options: None,
+        };
+        let t2 = StoredTrigger {
+            conditions: serde_json::json!({"callsign": "K2DEF"}),
+            actions: vec!["app".to_string()],
+            comment: "Test trigger".to_string(),
+            options: None,
+        };
+        assert!(!triggers_match(&t1, &t2));
+    }
+
+    #[test]
+    fn test_triggers_match_different_comment() {
+        let t1 = StoredTrigger {
+            conditions: serde_json::json!({"callsign": "W1ABC"}),
+            actions: vec!["app".to_string()],
+            comment: "Comment A".to_string(),
+            options: None,
+        };
+        let t2 = StoredTrigger {
+            conditions: serde_json::json!({"callsign": "W1ABC"}),
+            actions: vec!["app".to_string()],
+            comment: "Comment B".to_string(),
+            options: None,
+        };
+        assert!(!triggers_match(&t1, &t2));
+    }
+
+    #[test]
+    fn test_triggers_match_ignores_actions() {
+        let t1 = StoredTrigger {
+            conditions: serde_json::json!({"callsign": "W1ABC"}),
+            actions: vec!["app".to_string()],
+            comment: "Test".to_string(),
+            options: None,
+        };
+        let t2 = StoredTrigger {
+            conditions: serde_json::json!({"callsign": "W1ABC"}),
+            actions: vec!["url".to_string(), "app".to_string()],
+            comment: "Test".to_string(),
+            options: None,
+        };
+        assert!(triggers_match(&t1, &t2));
     }
 }
