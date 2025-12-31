@@ -313,6 +313,50 @@ fn delete_profile(name: &str) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+/// Calculate how many triggers from a profile are present in current triggers
+/// Returns (matched_count, profile_total)
+#[allow(dead_code)]
+fn calculate_profile_match(current: &[StoredTrigger], profile: &[StoredTrigger]) -> (usize, usize) {
+    let matched = profile
+        .iter()
+        .filter(|p| current.iter().any(|c| triggers_match(c, p)))
+        .count();
+    (matched, profile.len())
+}
+
+/// Filter out permanent triggers from a list
+#[allow(dead_code)]
+fn filter_out_permanent(
+    triggers: &[StoredTrigger],
+    permanent: &[StoredTrigger],
+) -> Vec<StoredTrigger> {
+    triggers
+        .iter()
+        .filter(|t| !permanent.iter().any(|p| triggers_match(t, p)))
+        .cloned()
+        .collect()
+}
+
+/// Find triggers that don't match any profile or permanent triggers
+#[allow(dead_code)]
+fn find_unexpected_triggers(
+    current: &[StoredTrigger],
+    permanent: &[StoredTrigger],
+    profile: Option<&[StoredTrigger]>,
+) -> Vec<StoredTrigger> {
+    current
+        .iter()
+        .filter(|t| {
+            let is_permanent = permanent.iter().any(|p| triggers_match(t, p));
+            let is_in_profile = profile
+                .map(|p| p.iter().any(|pt| triggers_match(t, pt)))
+                .unwrap_or(false);
+            !is_permanent && !is_in_profile
+        })
+        .cloned()
+        .collect()
+}
+
 fn load_config(config_file: Option<PathBuf>) -> Result<Config, Box<dyn Error>> {
     let config_path = if let Some(path) = config_file {
         path
@@ -1158,5 +1202,54 @@ mod tests {
     fn test_load_profile_not_found() {
         let result = load_profile("nonexistent_profile_xyz");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_calculate_profile_match_full_match() {
+        let current = vec![
+            StoredTrigger {
+                conditions: serde_json::json!({"callsign": "W1ABC"}),
+                actions: vec!["app".to_string()],
+                comment: "A".to_string(),
+                options: None,
+            },
+            StoredTrigger {
+                conditions: serde_json::json!({"callsign": "K2DEF"}),
+                actions: vec!["app".to_string()],
+                comment: "B".to_string(),
+                options: None,
+            },
+        ];
+        let profile = current.clone();
+        let (matched, total) = calculate_profile_match(&current, &profile);
+        assert_eq!(matched, 2);
+        assert_eq!(total, 2);
+    }
+
+    #[test]
+    fn test_calculate_profile_match_partial() {
+        let current = vec![StoredTrigger {
+            conditions: serde_json::json!({"callsign": "W1ABC"}),
+            actions: vec!["app".to_string()],
+            comment: "A".to_string(),
+            options: None,
+        }];
+        let profile = vec![
+            StoredTrigger {
+                conditions: serde_json::json!({"callsign": "W1ABC"}),
+                actions: vec!["app".to_string()],
+                comment: "A".to_string(),
+                options: None,
+            },
+            StoredTrigger {
+                conditions: serde_json::json!({"callsign": "K2DEF"}),
+                actions: vec!["app".to_string()],
+                comment: "B".to_string(),
+                options: None,
+            },
+        ];
+        let (matched, total) = calculate_profile_match(&current, &profile);
+        assert_eq!(matched, 1);
+        assert_eq!(total, 2);
     }
 }
