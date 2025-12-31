@@ -39,6 +39,14 @@ enum Commands {
 
         #[arg(long, value_enum)]
         mode: Option<Mode>,
+
+        /// Use compact format (comma-only, no spaces) for callsigns
+        #[arg(long, conflicts_with = "one_per_line")]
+        compact: bool,
+
+        /// Send callsigns one per line instead of comma-separated
+        #[arg(long, conflicts_with = "compact")]
+        one_per_line: bool,
     },
     /// Add triggers for all callsigns in a Ham2K PoLo callsign notes file
     ImportPoloNotes {
@@ -58,6 +66,14 @@ enum Commands {
         /// Show what would be added without actually adding triggers
         #[arg(long)]
         dry_run: bool,
+
+        /// Use compact format (comma-only, no spaces) for callsigns
+        #[arg(long, conflicts_with = "one_per_line")]
+        compact: bool,
+
+        /// Send callsigns one per line instead of comma-separated
+        #[arg(long, conflicts_with = "compact")]
+        one_per_line: bool,
     },
     /// Backup all triggers to a JSON file
     Backup {
@@ -122,6 +138,36 @@ impl Mode {
     }
 }
 
+/// Determines how multiple callsigns are formatted when sent to HamAlert
+#[derive(Clone, Copy, Default)]
+enum CallsignFormat {
+    /// Comma-space separated: "N0CALL, K0TEST, W0XYZ"
+    #[default]
+    Default,
+    /// Comma-only (compact): "N0CALL,K0TEST,W0XYZ"
+    Compact,
+    /// One per line: "N0CALL\nK0TEST\nW0XYZ"
+    OnePerLine,
+}
+
+impl CallsignFormat {
+    fn separator(&self) -> &'static str {
+        match self {
+            CallsignFormat::Default => ", ",
+            CallsignFormat::Compact => ",",
+            CallsignFormat::OnePerLine => "\n",
+        }
+    }
+
+    fn from_flags(compact: bool, one_per_line: bool) -> Self {
+        match (compact, one_per_line) {
+            (true, _) => CallsignFormat::Compact,
+            (_, true) => CallsignFormat::OnePerLine,
+            _ => CallsignFormat::Default,
+        }
+    }
+}
+
 #[derive(Serialize)]
 struct TriggerData {
     conditions: Conditions,
@@ -135,6 +181,15 @@ struct Conditions {
     callsign: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     mode: Option<String>,
+}
+
+fn backup_dir() -> Result<PathBuf, Box<dyn Error>> {
+    let data_dir = dirs::data_dir()
+        .ok_or("Could not determine data directory")?
+        .join("hamalert")
+        .join("backups");
+    fs::create_dir_all(&data_dir)?;
+    Ok(data_dir)
 }
 
 fn load_config(config_file: Option<PathBuf>) -> Result<Config, Box<dyn Error>> {
@@ -426,6 +481,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
             comment,
             actions,
             mode,
+            compact,
+            one_per_line,
         } => {
             let action_strings: Vec<String> =
                 actions.iter().map(|a| a.as_str().to_string()).collect();
@@ -435,8 +492,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
             if callsign.is_empty() {
                 return Err("At least one --callsign must be provided".into());
             }
-            // Join all callsigns with commas for a single trigger
-            let combined_callsigns = callsign.join(",");
+            // Join callsigns with the specified format
+            let format = CallsignFormat::from_flags(compact, one_per_line);
+            let combined_callsigns = callsign.join(format.separator());
             add_trigger(
                 &client,
                 &combined_callsigns,
@@ -452,6 +510,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
             actions,
             mode,
             dry_run,
+            compact,
+            one_per_line,
         } => {
             let callsigns = fetch_polo_notes(&client, &url).await?;
 
@@ -466,6 +526,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 actions.iter().map(|a| a.as_str().to_string()).collect();
 
             let mode_string = mode.as_ref().map(|m| m.as_str().to_string());
+            let format = CallsignFormat::from_flags(compact, one_per_line);
 
             if dry_run {
                 println!("\nDry run - would add triggers for:");
@@ -476,7 +537,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     );
                 }
             } else {
-                let combined_callsigns = callsigns.join(",");
+                let combined_callsigns = callsigns.join(format.separator());
                 add_trigger(
                     &client,
                     &combined_callsigns,
@@ -490,10 +551,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
         Commands::Backup { output } => {
             let triggers = fetch_triggers(&client).await?;
 
-            let output_path = output.unwrap_or_else(|| {
-                let date = Local::now().format("%Y-%m-%d");
-                PathBuf::from(format!("hamalert-backup-{}.json", date))
-            });
+            let output_path = match output {
+                Some(path) => path,
+                None => {
+                    let date = Local::now().format("%Y-%m-%d");
+                    backup_dir()?.join(format!("hamalert-backup-{}.json", date))
+                }
+            };
 
             let json = serde_json::to_string_pretty(&triggers)?;
             fs::write(&output_path, json)?;
@@ -530,7 +594,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             }
 
             // Create auto-backup before destructive operation
-            let backup_path = PathBuf::from(format!(
+            let backup_path = backup_dir()?.join(format!(
                 "hamalert-backup-before-restore-{}.json",
                 Local::now().format("%Y-%m-%d-%H%M%S")
             ));
@@ -728,7 +792,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             }
 
             // Auto-backup before deletion
-            let backup_path = PathBuf::from(format!(
+            let backup_path = backup_dir()?.join(format!(
                 "hamalert-backup-before-bulk-delete-{}.json",
                 Local::now().format("%Y-%m-%d-%H%M%S")
             ));
