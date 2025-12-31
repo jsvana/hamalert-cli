@@ -1154,11 +1154,64 @@ async fn main() -> Result<(), Box<dyn Error>> {
             ProfileCommands::Status => {
                 println!("profile status - not yet implemented");
             }
-            ProfileCommands::Save {
-                name,
-                from_backup: _,
-            } => {
-                println!("profile save {} - not yet implemented", name);
+            ProfileCommands::Save { name, from_backup } => {
+                let permanent = load_permanent_triggers()?;
+
+                let triggers: Vec<StoredTrigger> = match &from_backup {
+                    Some(path) => {
+                        let content = fs::read_to_string(path)
+                            .map_err(|e| format!("Failed to read backup file: {}", e))?;
+                        let backup_triggers: Vec<Trigger> = serde_json::from_str(&content)
+                            .map_err(|e| format!("Failed to parse backup file: {}", e))?;
+                        backup_triggers
+                            .iter()
+                            .map(StoredTrigger::from_trigger)
+                            .collect()
+                    }
+                    None => {
+                        let fetched = fetch_triggers(&client).await?;
+                        fetched.iter().map(StoredTrigger::from_trigger).collect()
+                    }
+                };
+
+                // Filter out permanent triggers
+                let profile_triggers = filter_out_permanent(&triggers, &permanent);
+
+                // Check if profile already exists
+                let profile_path = profiles_dir()?.join(format!("{}.json", name));
+                if profile_path.exists() {
+                    let existing = load_profile(&name)?;
+                    if existing != profile_triggers {
+                        println!("Profile '{}' already exists with different content.", name);
+                        println!(
+                            "Existing: {} triggers, New: {} triggers",
+                            existing.len(),
+                            profile_triggers.len()
+                        );
+                        print!("Overwrite? [y/N]: ");
+                        std::io::Write::flush(&mut std::io::stdout())?;
+                        let mut confirm = String::new();
+                        std::io::stdin().read_line(&mut confirm)?;
+                        if !confirm.trim().eq_ignore_ascii_case("y") {
+                            println!("Cancelled.");
+                            return Ok(());
+                        }
+                    }
+                }
+
+                let _path = save_profile(&name, &profile_triggers)?;
+                println!(
+                    "Saved {} triggers to profile '{}' (excluded {} permanent)",
+                    profile_triggers.len(),
+                    name,
+                    triggers.len() - profile_triggers.len()
+                );
+
+                // Set as current profile if saving from live state
+                if from_backup.is_none() {
+                    save_current_profile_name(&name)?;
+                    println!("Set '{}' as current profile.", name);
+                }
             }
             ProfileCommands::Switch {
                 name,
