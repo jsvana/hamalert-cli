@@ -67,6 +67,16 @@ hamalert-cli add-trigger \
 - `threema` - Threema messenger notification
 - `telnet` - Telnet cluster notification
 
+Actions need to be added individually:
+
+```bash
+hamalert-cli add-trigger \
+  --callsign W1AW \
+  --comment "Monitor activity" \
+  --actions app \
+  --actions telnet
+```
+
 #### Available Modes
 
 Optionally filter by transmission mode:
