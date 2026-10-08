@@ -204,6 +204,29 @@ enum Commands {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Replace the callsign list of an existing trigger from a file (one callsign per line)
+    SetCallsigns {
+        /// ID of the trigger to update (see `backup` output for IDs)
+        #[arg(long, required_unless_present = "comment", conflicts_with = "comment")]
+        trigger_id: Option<String>,
+
+        /// Select the trigger by its exact comment instead of its ID
+        #[arg(long)]
+        comment: Option<String>,
+
+        /// Path to the callsign file
+        #[arg(long)]
+        file: PathBuf,
+
+        /// Actually update the trigger (default is dry-run)
+        #[arg(long)]
+        no_dry_run: bool,
+
+        /// Refuse to apply if more than this many callsigns would be removed
+        /// (default: 10% of the current list, minimum 5)
+        #[arg(long)]
+        max_removals: Option<usize>,
+    },
     /// Manage trigger profiles for different locations/activities
     #[command(subcommand)]
     Profile(ProfileCommands),
@@ -891,6 +914,123 @@ async fn fetch_triggers(client: &Client) -> Result<Vec<Trigger>, Box<dyn Error>>
     Ok(triggers)
 }
 
+/// How a trigger stores its callsign condition, so it can be written back the same way
+#[derive(Debug, PartialEq)]
+enum CallsignShape {
+    /// A single string joined by this separator
+    Text(&'static str),
+    /// A JSON array of strings
+    List,
+}
+
+/// Parse a callsign file (one per line, `#`/`//` comments allowed) into a sorted,
+/// de-duplicated, uppercased list.
+fn parse_callsign_file(content: &str) -> Vec<String> {
+    let set: std::collections::BTreeSet<String> = parse_polo_notes_content(content)
+        .into_iter()
+        .map(|c| c.to_uppercase())
+        .collect();
+    set.into_iter().collect()
+}
+
+/// Read the callsigns out of a trigger's `conditions.callsign`, along with its shape.
+fn parse_callsign_condition(
+    conditions: &serde_json::Value,
+) -> Result<(Vec<String>, CallsignShape), String> {
+    match conditions.get("callsign") {
+        Some(serde_json::Value::String(text)) => {
+            let separator = if text.contains('\n') {
+                "\n"
+            } else if text.contains(", ") || !text.contains(',') {
+                CallsignFormat::Default.separator()
+            } else {
+                CallsignFormat::Compact.separator()
+            };
+            let callsigns = text
+                .split([',', '\n'])
+                .map(|c| c.trim().to_uppercase())
+                .filter(|c| !c.is_empty())
+                .collect();
+            Ok((callsigns, CallsignShape::Text(separator)))
+        }
+        Some(serde_json::Value::Array(items)) => {
+            let callsigns = items
+                .iter()
+                .map(|v| {
+                    v.as_str()
+                        .map(|c| c.trim().to_uppercase())
+                        .ok_or_else(|| format!("Unexpected callsign entry: {}", v))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok((callsigns, CallsignShape::List))
+        }
+        Some(other) => Err(format!("Unexpected callsign condition: {}", other)),
+        None if conditions.get("fullCallsign").is_some() => Err(
+            "Trigger uses a fullCallsign condition; only callsign conditions are supported"
+                .to_string(),
+        ),
+        None => Err("Trigger has no callsign condition".to_string()),
+    }
+}
+
+/// Write callsigns into `conditions.callsign` in the given shape, leaving other conditions alone.
+fn apply_callsigns(
+    conditions: &mut serde_json::Value,
+    callsigns: &[String],
+    shape: &CallsignShape,
+) {
+    let value = match shape {
+        CallsignShape::Text(separator) => json!(callsigns.join(separator)),
+        CallsignShape::List => json!(callsigns),
+    };
+    conditions["callsign"] = value;
+}
+
+/// Return (added, removed, unchanged count) going from `current` to `desired`.
+fn diff_callsigns(current: &[String], desired: &[String]) -> (Vec<String>, Vec<String>, usize) {
+    let current: std::collections::BTreeSet<&String> = current.iter().collect();
+    let desired: std::collections::BTreeSet<&String> = desired.iter().collect();
+    let added = desired
+        .difference(&current)
+        .map(|c| c.to_string())
+        .collect();
+    let removed = current
+        .difference(&desired)
+        .map(|c| c.to_string())
+        .collect();
+    let unchanged = current.intersection(&desired).count();
+    (added, removed, unchanged)
+}
+
+/// Maximum removals allowed in one update: the explicit limit, or 10% of the list (minimum 5).
+fn removal_limit(current_len: usize, max_removals: Option<usize>) -> usize {
+    max_removals.unwrap_or_else(|| (current_len / 10).max(5))
+}
+
+/// Find exactly one trigger by ID or exact comment.
+fn select_trigger<'a>(
+    triggers: &'a [Trigger],
+    trigger_id: Option<&str>,
+    comment: Option<&str>,
+) -> Result<&'a Trigger, String> {
+    let matches: Vec<&Trigger> = triggers
+        .iter()
+        .filter(|t| match (trigger_id, comment) {
+            (Some(id), _) => t.id == id,
+            (None, Some(comment)) => t.comment == comment,
+            (None, None) => false,
+        })
+        .collect();
+    match matches.as_slice() {
+        [trigger] => Ok(trigger),
+        [] => Err("No matching trigger found".to_string()),
+        _ => Err(format!(
+            "{} triggers match; use --trigger-id instead",
+            matches.len()
+        )),
+    }
+}
+
 async fn add_trigger(
     client: &Client,
     callsign: &str,
@@ -1474,6 +1614,96 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     }
                 }
             }
+        }
+        Commands::SetCallsigns {
+            trigger_id,
+            comment,
+            file,
+            no_dry_run,
+            max_removals,
+        } => {
+            let content = fs::read_to_string(&file)
+                .map_err(|e| format!("Failed to read file {}: {}", file.display(), e))?;
+            let desired = parse_callsign_file(&content);
+
+            if desired.is_empty() {
+                return Err(format!(
+                    "No callsigns found in {}; refusing to empty the trigger",
+                    file.display()
+                )
+                .into());
+            }
+
+            let triggers = fetch_triggers(&client).await?;
+            let mut trigger =
+                select_trigger(&triggers, trigger_id.as_deref(), comment.as_deref())?.clone();
+            let (current, shape) = parse_callsign_condition(&trigger.conditions)?;
+            let (added, removed, unchanged) = diff_callsigns(&current, &desired);
+
+            println!("Trigger: {}", format_trigger_for_display(&trigger));
+            println!(
+                "{} added, {} removed, {} unchanged",
+                added.len(),
+                removed.len(),
+                unchanged
+            );
+            for callsign in &added {
+                println!("  + {}", callsign);
+            }
+            for callsign in &removed {
+                println!("  - {}", callsign);
+            }
+
+            if added.is_empty() && removed.is_empty() {
+                println!("No changes.");
+                return Ok(());
+            }
+
+            let limit = removal_limit(current.len(), max_removals);
+            let refusal = (removed.len() > limit).then(|| {
+                format!(
+                    "Refusing to remove {} callsigns (limit {}). Review the removals above; \
+                     to allow them, re-run with --max-removals {}",
+                    removed.len(),
+                    limit,
+                    removed.len()
+                )
+            });
+
+            if !no_dry_run {
+                if let Some(refusal) = &refusal {
+                    println!("\nWarning: applying would fail. {}", refusal);
+                }
+                println!("\nDry run: no changes made. Re-run with --no-dry-run to apply.");
+                return Ok(());
+            }
+
+            if let Some(refusal) = refusal {
+                return Err(refusal.into());
+            }
+
+            apply_callsigns(&mut trigger.conditions, &desired, &shape);
+            update_trigger(&client, &trigger).await?;
+
+            // HamAlert can return success without saving, so read the trigger back to confirm
+            let triggers = fetch_triggers(&client).await?;
+            let saved = select_trigger(&triggers, Some(&trigger.id), None)?;
+            let (saved_callsigns, _) = parse_callsign_condition(&saved.conditions)?;
+            let (missing, unexpected, _) = diff_callsigns(&saved_callsigns, &desired);
+            if !missing.is_empty() || !unexpected.is_empty() {
+                return Err(format!(
+                    "Trigger '{}' did not save as expected: {} callsigns missing, {} unexpected",
+                    trigger.comment,
+                    missing.len(),
+                    unexpected.len()
+                )
+                .into());
+            }
+            println!(
+                "Updated trigger '{}' ({} callsigns, verified)",
+                trigger.comment,
+                saved_callsigns.len()
+            );
         }
         Commands::BulkDelete { dry_run } => {
             let triggers = fetch_triggers(&client).await?;
@@ -2743,5 +2973,105 @@ mod tests {
     #[test]
     fn test_profile_match_percentage_defaults_to_full_match_for_empty_profile() {
         assert_eq!(profile_match_percentage(0, 0), 100);
+    }
+
+    fn trigger(id: &str, comment: &str, conditions: serde_json::Value) -> Trigger {
+        serde_json::from_value(json!({
+            "_id": id,
+            "conditions": conditions,
+            "actions": ["url"],
+            "comment": comment,
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn test_parse_callsign_file_dedupes_and_uppercases() {
+        let content = "# members\nw1abc\nVE7XXX\n\nW1ABC\n// note\n";
+        assert_eq!(parse_callsign_file(content), vec!["VE7XXX", "W1ABC"]);
+    }
+
+    #[test]
+    fn test_parse_callsign_condition_string_shapes() {
+        let (calls, shape) =
+            parse_callsign_condition(&json!({"callsign": "W1ABC, ve7xxx"})).unwrap();
+        assert_eq!(calls, vec!["W1ABC", "VE7XXX"]);
+        assert_eq!(shape, CallsignShape::Text(", "));
+
+        let (_, shape) = parse_callsign_condition(&json!({"callsign": "W1ABC,VE7XXX"})).unwrap();
+        assert_eq!(shape, CallsignShape::Text(","));
+
+        let (calls, shape) =
+            parse_callsign_condition(&json!({"callsign": "W1ABC\nVE7XXX\n"})).unwrap();
+        assert_eq!(calls, vec!["W1ABC", "VE7XXX"]);
+        assert_eq!(shape, CallsignShape::Text("\n"));
+    }
+
+    #[test]
+    fn test_parse_callsign_condition_array() {
+        let (calls, shape) =
+            parse_callsign_condition(&json!({"callsign": ["W1ABC", "ve7xxx"]})).unwrap();
+        assert_eq!(calls, vec!["W1ABC", "VE7XXX"]);
+        assert_eq!(shape, CallsignShape::List);
+    }
+
+    #[test]
+    fn test_parse_callsign_condition_errors() {
+        assert!(parse_callsign_condition(&json!({"fullCallsign": "W1ABC"})).is_err());
+        assert!(parse_callsign_condition(&json!({"source": "sotawatch"})).is_err());
+        assert!(parse_callsign_condition(&json!({"callsign": 5})).is_err());
+    }
+
+    #[test]
+    fn test_apply_callsigns_preserves_other_conditions() {
+        let mut conditions = json!({"callsign": "W1ABC", "source": ["sotawatch"], "band": ["20m"]});
+        let desired = vec!["K7SAM".to_string(), "W1ABC".to_string()];
+        apply_callsigns(&mut conditions, &desired, &CallsignShape::Text(", "));
+        assert_eq!(
+            conditions,
+            json!({"callsign": "K7SAM, W1ABC", "source": ["sotawatch"], "band": ["20m"]})
+        );
+
+        apply_callsigns(&mut conditions, &desired, &CallsignShape::List);
+        assert_eq!(conditions["callsign"], json!(["K7SAM", "W1ABC"]));
+        assert_eq!(conditions["source"], json!(["sotawatch"]));
+    }
+
+    #[test]
+    fn test_diff_callsigns() {
+        let current = vec!["W1ABC".to_string(), "VE7XXX".to_string()];
+        let desired = vec!["VE7XXX".to_string(), "K7SAM".to_string()];
+        let (added, removed, unchanged) = diff_callsigns(&current, &desired);
+        assert_eq!(added, vec!["K7SAM"]);
+        assert_eq!(removed, vec!["W1ABC"]);
+        assert_eq!(unchanged, 1);
+    }
+
+    #[test]
+    fn test_removal_limit() {
+        assert_eq!(removal_limit(10, None), 5);
+        assert_eq!(removal_limit(200, None), 20);
+        assert_eq!(removal_limit(200, Some(3)), 3);
+    }
+
+    #[test]
+    fn test_select_trigger() {
+        let triggers = vec![
+            trigger("a1", "SOTA spots", json!({"callsign": "W1ABC"})),
+            trigger("b2", "DX", json!({"callsign": "K7SAM"})),
+            trigger("c3", "DX", json!({"callsign": "N6AAA"})),
+        ];
+        assert_eq!(
+            select_trigger(&triggers, Some("b2"), None).unwrap().id,
+            "b2"
+        );
+        assert_eq!(
+            select_trigger(&triggers, None, Some("SOTA spots"))
+                .unwrap()
+                .id,
+            "a1"
+        );
+        assert!(select_trigger(&triggers, Some("zz"), None).is_err());
+        assert!(select_trigger(&triggers, None, Some("DX")).is_err());
     }
 }

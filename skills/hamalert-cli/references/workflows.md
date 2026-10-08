@@ -67,6 +67,21 @@ Execute after approval:
 hamalert-cli import-file --file callsigns.txt --comment "Local imports" --actions app
 ```
 
+## Replace a Trigger's Callsign List
+
+Find the trigger ID in a backup, then preview the diff:
+
+```bash
+hamalert-cli backup
+hamalert-cli set-callsigns --trigger-id <id> --file callsigns.txt
+```
+
+Execute after approval. If the removal limit refuses the update, review the removed callsigns with the user before passing `--max-removals`:
+
+```bash
+hamalert-cli set-callsigns --trigger-id <id> --file callsigns.txt --no-dry-run
+```
+
 ## Import Ham2K PoLo Notes
 
 Preview:

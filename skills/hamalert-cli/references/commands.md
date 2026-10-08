@@ -81,6 +81,15 @@ hamalert-cli edit
 
 Fetches triggers, asks the user to choose one, opens editable JSON in `$EDITOR` or `vi`, validates JSON, and updates the live trigger if changed.
 
+## set-callsigns
+
+```bash
+hamalert-cli set-callsigns --trigger-id <id> --file callsigns.txt
+hamalert-cli set-callsigns --comment "<exact comment>" --file callsigns.txt --no-dry-run
+```
+
+Replaces the callsign list of one existing trigger with the file's contents (one callsign per line, `#` comments allowed), updating it in place. Only `conditions.callsign` changes, written back in its original string or array form; other conditions, actions, comment, and options are kept. Dry-run by default, printing added and removed callsigns. Refuses an empty file, or more removals than `--max-removals` (default: 10% of the current list, minimum 5). After saving, it re-fetches the trigger and errors if the saved list does not match. Trigger IDs (`_id`) appear in `backup` output.
+
 ## bulk-delete
 
 ```bash

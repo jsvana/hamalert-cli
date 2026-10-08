@@ -18,6 +18,7 @@ hamalert-cli restore --input <file>
 hamalert-cli import-file --file <file> ... --dry-run
 hamalert-cli import-polo-notes --url <url> ... --dry-run
 hamalert-cli bulk-delete --dry-run
+hamalert-cli set-callsigns --trigger-id <id> --file <file>
 hamalert-cli profile list
 hamalert-cli profile show <name>
 hamalert-cli profile status
@@ -43,6 +44,7 @@ hamalert-cli import-polo-notes ...      # without --dry-run
 hamalert-cli restore --input <file> --no-dry-run
 hamalert-cli edit
 hamalert-cli bulk-delete                # without --dry-run
+hamalert-cli set-callsigns ... --no-dry-run
 hamalert-cli profile switch <name> --no-dry-run
 ```
 

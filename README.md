@@ -220,6 +220,18 @@ hamalert-cli edit
 # Saves changes back to HamAlert
 ```
 
+### set-callsigns
+
+Replace the callsign list of an existing trigger with the contents of a file (one callsign per line, `#` comments allowed). Only `conditions.callsign` changes; every other condition, action, comment and option is kept, and the trigger is updated in place:
+
+```bash
+hamalert-cli set-callsigns --trigger-id <id> --file callsigns.txt               # Dry run: shows added/removed
+hamalert-cli set-callsigns --trigger-id <id> --file callsigns.txt --no-dry-run  # Apply
+hamalert-cli set-callsigns --comment "SOTA spots" --file callsigns.txt          # Select by exact comment
+```
+
+Trigger IDs (`_id`) are listed in `backup` output. As a safeguard, the update is refused if the file is empty or if more callsigns would be removed than `--max-removals` (default: 10% of the current list, minimum 5).
+
 ### bulk-delete
 
 Interactively delete multiple triggers with a TUI multi-select interface:
