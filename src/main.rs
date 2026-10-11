@@ -327,36 +327,6 @@ impl Mode {
     }
 }
 
-/// Determines how multiple callsigns are formatted when sent to HamAlert
-#[derive(Clone, Copy, Default)]
-enum CallsignFormat {
-    /// Comma-space separated: "N0CALL, K0TEST, W0XYZ"
-    #[default]
-    Default,
-    /// Comma-only (compact): "N0CALL,K0TEST,W0XYZ"
-    Compact,
-    /// One per line: "N0CALL\nK0TEST\nW0XYZ"
-    OnePerLine,
-}
-
-impl CallsignFormat {
-    fn separator(&self) -> &'static str {
-        match self {
-            CallsignFormat::Default => ", ",
-            CallsignFormat::Compact => ",",
-            CallsignFormat::OnePerLine => "\n",
-        }
-    }
-
-    fn from_flags(compact: bool, one_per_line: bool) -> Self {
-        match (compact, one_per_line) {
-            (true, _) => CallsignFormat::Compact,
-            (_, true) => CallsignFormat::OnePerLine,
-            _ => CallsignFormat::Default,
-        }
-    }
-}
-
 #[derive(Serialize)]
 struct TriggerData {
     conditions: Conditions,
@@ -367,7 +337,7 @@ struct TriggerData {
 
 #[derive(Serialize)]
 struct Conditions {
-    callsign: String,
+    callsign: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     mode: Option<String>,
 }
@@ -893,14 +863,14 @@ async fn fetch_triggers(client: &Client) -> Result<Vec<Trigger>, Box<dyn Error>>
 
 async fn add_trigger(
     client: &Client,
-    callsign: &str,
+    callsign: Vec<String>, 
     comment: &str,
     actions: Vec<String>,
     mode: Option<String>,
 ) -> Result<(), Box<dyn Error>> {
     let trigger_data = TriggerData {
         conditions: Conditions {
-            callsign: callsign.to_string(),
+            callsign: callsign.clone(),
             mode,
         },
         comment: comment.to_string(),
@@ -914,7 +884,7 @@ async fn add_trigger(
         .send()
         .await?;
 
-    println!("Add trigger status for {}: {}", callsign, response.status());
+    println!("Add trigger status for {}: {}", callsign.join(", "), response.status());
 
     // Optionally print the response body
     let body = response.text().await?;
@@ -1022,7 +992,6 @@ async fn import_callsigns(
                 .join(","),
         )
     };
-    let format = CallsignFormat::from_flags(options.trigger.compact, options.trigger.one_per_line);
 
     if options.dry_run {
         println!("\nDry run - would add triggers for:");
@@ -1033,10 +1002,9 @@ async fn import_callsigns(
             );
         }
     } else {
-        let combined_callsigns = callsigns.join(format.separator());
         add_trigger(
             client,
-            &combined_callsigns,
+            callsigns,
             &options.trigger.comment,
             action_strings,
             mode_string,
@@ -1272,12 +1240,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
             if callsign.is_empty() {
                 return Err("At least one --callsign must be provided".into());
             }
-            // Join callsigns with the specified format
-            let format = CallsignFormat::from_flags(options.compact, options.one_per_line);
-            let combined_callsigns = callsign.join(format.separator());
+            // Add trigger
             add_trigger(
                 &client,
-                &combined_callsigns,
+                callsign,
                 &options.comment,
                 action_strings,
                 mode_string,
