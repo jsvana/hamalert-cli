@@ -30,6 +30,8 @@ run_help import-file
 run_help backup
 run_help restore
 run_help edit
+run_help pause
+run_help resume
 run_help bulk-delete
 run_help profile
 run_help profile save
