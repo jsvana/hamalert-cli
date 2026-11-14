@@ -1,6 +1,6 @@
 use chrono::Local;
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use inquire::{InquireError, MultiSelect, Password, Text};
+use inquire::{InquireError, MultiSelect, Password, Select, Text};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -11,6 +11,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 const KEYRING_SERVICE: &str = "hamalert-cli";
+const TRIGGER_DISABLE_ENDPOINT: &str = "https://hamalert.org/ajax/trigger_disable";
 
 #[derive(Deserialize, Serialize, Default)]
 struct Config {
@@ -198,6 +199,18 @@ enum Commands {
     },
     /// Interactively edit an existing trigger
     Edit,
+    /// Pause a trigger while keeping its settings
+    Pause {
+        /// Skip selection and use the trigger ID from the picker or a backup
+        #[arg(long)]
+        trigger_id: Option<String>,
+    },
+    /// Resume a paused trigger
+    Resume {
+        /// Skip selection and use the trigger ID from the picker or a backup
+        #[arg(long)]
+        trigger_id: Option<String>,
+    },
     /// Interactively delete multiple triggers with TUI selection
     BulkDelete {
         /// Show what would be deleted without actually deleting
@@ -891,6 +904,108 @@ async fn fetch_triggers(client: &Client) -> Result<Vec<Trigger>, Box<dyn Error>>
     Ok(triggers)
 }
 
+async fn set_trigger_disabled(
+    client: &Client,
+    endpoint: &str,
+    trigger: &Trigger,
+    disabled: bool,
+) -> Result<(), Box<dyn Error>> {
+    let action = if disabled { "pause" } else { "resume" };
+    let response = client
+        .post(endpoint)
+        .form(&[
+            ("id", trigger.id.as_str()),
+            ("disabled", if disabled { "1" } else { "0" }),
+        ])
+        .send()
+        .await?;
+
+    if !response.status().is_success() {
+        return Err(format!(
+            "Failed to {action} trigger {}: {}",
+            trigger.id,
+            response.status()
+        )
+        .into());
+    }
+
+    if !response.json::<bool>().await? {
+        return Err(format!(
+            "Failed to {action} trigger {}: HamAlert did not change its state",
+            trigger.id
+        )
+        .into());
+    }
+
+    Ok(())
+}
+
+async fn change_trigger_state(
+    client: &Client,
+    id: Option<&str>,
+    disabled: bool,
+) -> Result<(), Box<dyn Error>> {
+    let (action, eligible_state, target_state, success) = if disabled {
+        ("pause", "enabled", "paused", "Paused")
+    } else {
+        ("resume", "paused", "enabled", "Resumed")
+    };
+    let triggers = fetch_triggers(client).await?;
+    let trigger = if let Some(id) = id {
+        let trigger = triggers
+            .iter()
+            .find(|t| t.id == id)
+            .ok_or_else(|| format!("No trigger found with ID {id}."))?;
+        if trigger.disabled.unwrap_or(false) == disabled {
+            println!(
+                "Trigger {id} ({:?}) is already {target_state}.",
+                trigger.comment
+            );
+            return Ok(());
+        }
+        trigger
+    } else {
+        let eligible: Vec<_> = triggers
+            .iter()
+            .filter(|t| t.disabled.unwrap_or(false) != disabled)
+            .collect();
+        if eligible.is_empty() {
+            println!("No {eligible_state} triggers to {action}.");
+            return Ok(());
+        }
+
+        let choices: Vec<_> = eligible
+            .iter()
+            .map(|t| {
+                let conditions = t.conditions.to_string();
+                let mut chars = conditions.chars();
+                let mut preview: String = chars.by_ref().take(100).collect();
+                if chars.next().is_some() {
+                    preview.push('…');
+                }
+                format!("[{}] {:?} {}", t.id, t.comment, preview)
+            })
+            .collect();
+        let prompt = format!("Select a trigger to {action}:");
+        match Select::new(&prompt, choices)
+            .with_vim_mode(false)
+            .with_help_message("Type to filter, Enter to select, Esc to cancel")
+            .raw_prompt()
+        {
+            Ok(selection) => eligible[selection.index],
+            Err(InquireError::OperationCanceled | InquireError::OperationInterrupted) => {
+                println!("Operation cancelled.");
+                return Ok(());
+            }
+            Err(error) => return Err(error.into()),
+        }
+    };
+
+    set_trigger_disabled(client, TRIGGER_DISABLE_ENDPOINT, trigger, disabled).await?;
+    println!("{success} trigger {} ({:?}).", trigger.id, trigger.comment);
+    Ok(())
+}
+
 async fn add_trigger(
     client: &Client,
     callsign: &str,
@@ -1474,6 +1589,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     }
                 }
             }
+        }
+        Commands::Pause { trigger_id } => {
+            change_trigger_state(&client, trigger_id.as_deref(), true).await?
+        }
+        Commands::Resume { trigger_id } => {
+            change_trigger_state(&client, trigger_id.as_deref(), false).await?
         }
         Commands::BulkDelete { dry_run } => {
             let triggers = fetch_triggers(&client).await?;
@@ -2213,6 +2334,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod trigger_state_tests;
 
 #[cfg(test)]
 mod tests {
