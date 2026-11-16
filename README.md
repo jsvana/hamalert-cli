@@ -10,15 +10,15 @@ hamalert-cli provides a simple CLI interface for interacting with HamAlert.org, 
 
 ### Prerequisites
 
-- Rust and Cargo (install from [rustup.rs](https://rustup.rs))
+- Rust and Cargo (install with [rustup](https://rustup.rs))
 - A HamAlert.org account
 
 ### Building from Source
 
 ```bash
-git clone <repository-url>
-cd hamalert-sub
-cargo build --release
+git clone https://github.com/jsvana/hamalert-cli.git
+cd hamalert-cli
+cargo build --locked --release
 ```
 
 The compiled binary will be available at `target/release/hamalert-cli`.
@@ -26,8 +26,16 @@ The compiled binary will be available at `target/release/hamalert-cli`.
 Optionally, install it to your PATH:
 
 ```bash
-cargo install --path .
+cargo install --locked --path .
 ```
+
+Prebuilt binaries are available from [GitHub Releases](https://github.com/jsvana/hamalert-cli/releases).
+
+### Development checks
+
+Rustup reads the pinned toolchain from `rust-toolchain.toml`. The minimum supported Rust version is declared in `Cargo.toml` and tested in CI.
+
+With [mise](https://mise.jdx.dev/), run `mise trust`, `mise install rust`, then `mise run check` to run formatting, Clippy, and tests. The same checks can also be run directly with Cargo.
 
 ### Agent Skill
 
