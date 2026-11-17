@@ -10,6 +10,10 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
+mod trigger_settings;
+use trigger_settings::{TriggerSettings, save_trigger};
+
+const TRIGGER_UPDATE_ENDPOINT: &str = "https://hamalert.org/ajax/trigger_update";
 const KEYRING_SERVICE: &str = "hamalert-cli";
 const TRIGGER_DISABLE_ENDPOINT: &str = "https://hamalert.org/ajax/trigger_disable";
 
@@ -116,12 +120,8 @@ struct Cli {
     command: Commands,
 }
 
-/// Shared options for trigger creation
-#[derive(Debug, Parser, Clone)]
-struct TriggerOptions {
-    #[arg(long)]
-    comment: String,
-
+#[derive(Debug, Args, Default)]
+struct NotificationFlags {
     /// Notification actions (e.g., --actions app telnet)
     #[arg(long, value_enum, num_args = 1..)]
     actions: Vec<Action>,
@@ -129,21 +129,65 @@ struct TriggerOptions {
     /// Filter by mode (e.g., --mode cw ft8)
     #[arg(long, value_enum, num_args = 1..)]
     mode: Vec<Mode>,
+}
 
-    /// Use compact format (comma-only, no spaces) for callsigns
+#[derive(Debug, Args)]
+struct LegacyCallsignFlags {
+    /// Deprecated. Callsign lists are now sent as JSON arrays.
     #[arg(long, conflicts_with = "one_per_line")]
     compact: bool,
 
-    /// Send callsigns one per line instead of comma-separated
+    /// Deprecated. Callsign lists are now sent as JSON arrays.
     #[arg(long, conflicts_with = "compact")]
     one_per_line: bool,
 }
 
-/// Shared options for import commands
-#[derive(Debug, Parser, Clone)]
-struct ImportOptions {
+#[derive(Debug, Args, Default)]
+struct TriggerFlags {
+    /// Set callsigns. Repeat this flag for multiple callsigns.
+    #[arg(long)]
+    callsign: Vec<String>,
+
+    /// Set the trigger's comment.
+    #[arg(long)]
+    comment: Option<String>,
+
     #[command(flatten)]
-    trigger: TriggerOptions,
+    notifications: NotificationFlags,
+
+    /// Minimum SNR in dB. Omit --snr-to to use the default maximum.
+    #[arg(long, allow_negative_numbers = true)]
+    snr_from: Option<i32>,
+
+    /// Maximum SNR in dB.
+    #[arg(long, allow_negative_numbers = true, requires = "snr_from")]
+    snr_to: Option<i32>,
+}
+
+#[derive(Debug, Args)]
+struct TriggerInput {
+    /// Open the trigger settings in $EDITOR.
+    #[arg(long, conflicts_with_all = ["from_json", "callsign", "comment", "actions", "mode", "snr_from", "snr_to"])]
+    editor: bool,
+
+    /// Read full trigger settings from a JSON file, or - for stdin.
+    #[arg(long, conflicts_with_all = ["callsign", "comment", "actions", "mode", "snr_from", "snr_to"])]
+    from_json: Option<PathBuf>,
+
+    #[command(flatten)]
+    flags: TriggerFlags,
+}
+
+#[derive(Debug, Args)]
+struct ImportOptions {
+    #[arg(long)]
+    comment: String,
+
+    #[command(flatten)]
+    notifications: NotificationFlags,
+
+    #[command(flatten)]
+    legacy: LegacyCallsignFlags,
 
     /// Show what would be added without actually adding triggers
     #[arg(long)]
@@ -155,13 +199,14 @@ enum Commands {
     /// Configure stored HamAlert credentials
     #[command(subcommand)]
     Auth(AuthCommands),
-    /// Add a trigger for one or more callsigns
+    /// Add a trigger using callsign flags or full JSON settings
+    #[command(group(clap::ArgGroup::new("add_input").required(true).args(["comment", "editor", "from_json"])))]
     AddTrigger {
-        #[arg(long)]
-        callsign: Vec<String>,
+        #[command(flatten)]
+        input: TriggerInput,
 
         #[command(flatten)]
-        options: TriggerOptions,
+        legacy: LegacyCallsignFlags,
     },
     /// Add triggers for all callsigns in a Ham2K PoLo callsign notes file (fetched from URL)
     ImportPoloNotes {
@@ -197,8 +242,19 @@ enum Commands {
         #[arg(long)]
         no_dry_run: bool,
     },
-    /// Interactively edit an existing trigger
-    Edit,
+    /// Edit an existing trigger
+    Edit {
+        /// Skip the picker and edit this trigger ID.
+        #[arg(long)]
+        trigger_id: Option<String>,
+
+        /// Remove both SNR bounds.
+        #[arg(long, conflicts_with_all = ["snr_from", "snr_to", "editor", "from_json"])]
+        clear_snr: bool,
+
+        #[command(flatten)]
+        input: TriggerInput,
+    },
     /// Pause a trigger while keeping its settings
     Pause {
         /// Skip selection and use the trigger ID from the picker or a backup
@@ -338,21 +394,6 @@ impl Mode {
             Mode::SSB => "ssb",
         }
     }
-}
-
-#[derive(Serialize)]
-struct TriggerData {
-    conditions: Conditions,
-    comment: String,
-    actions: Vec<String>,
-    options: serde_json::Value,
-}
-
-#[derive(Serialize)]
-struct Conditions {
-    callsign: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    mode: Option<String>,
 }
 
 fn backup_dir() -> Result<PathBuf, Box<dyn Error>> {
@@ -779,66 +820,15 @@ struct Trigger {
     id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     user_id: Option<String>,
-    conditions: serde_json::Value,
-    actions: Vec<String>,
-    comment: String,
     #[serde(skip_serializing_if = "Option::is_none", rename = "matchCount")]
     match_count: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     disabled: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    options: Option<serde_json::Value>,
+    #[serde(flatten)]
+    settings: TriggerSettings,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct EditableTrigger {
-    conditions: serde_json::Value,
-    actions: Vec<String>,
-    comment: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    options: Option<serde_json::Value>,
-}
-
-impl EditableTrigger {
-    fn from_trigger(trigger: &Trigger) -> Self {
-        Self {
-            conditions: trigger.conditions.clone(),
-            actions: trigger.actions.clone(),
-            comment: trigger.comment.clone(),
-            options: trigger.options.clone(),
-        }
-    }
-
-    fn apply_to_trigger(self, trigger: &mut Trigger) {
-        trigger.conditions = self.conditions;
-        trigger.actions = self.actions;
-        trigger.comment = self.comment;
-        trigger.options = self.options;
-    }
-}
-
-/// Trigger data for storage in profile files (without runtime fields like _id)
-#[allow(dead_code)]
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-struct StoredTrigger {
-    conditions: serde_json::Value,
-    actions: Vec<String>,
-    comment: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    options: Option<serde_json::Value>,
-}
-
-impl StoredTrigger {
-    #[allow(dead_code)]
-    fn from_trigger(trigger: &Trigger) -> Self {
-        Self {
-            conditions: trigger.conditions.clone(),
-            actions: trigger.actions.clone(),
-            comment: trigger.comment.clone(),
-            options: trigger.options.clone(),
-        }
-    }
-}
+type StoredTrigger = TriggerSettings;
 
 /// Check if two triggers match by conditions and comment (identity match)
 #[allow(dead_code)]
@@ -847,17 +837,46 @@ fn triggers_match(a: &StoredTrigger, b: &StoredTrigger) -> bool {
 }
 
 fn format_trigger_for_display(trigger: &Trigger) -> String {
-    let mode = trigger
-        .conditions
+    format_trigger_settings(&trigger.settings)
+}
+
+fn condition_label(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::String(value) => value.clone(),
+        serde_json::Value::Array(values) => values
+            .iter()
+            .map(condition_label)
+            .collect::<Vec<_>>()
+            .join(", "),
+        _ => value.to_string(),
+    }
+}
+
+fn format_trigger_settings(settings: &TriggerSettings) -> String {
+    let conditions = &settings.conditions;
+    let mode = conditions
         .get("mode")
-        .and_then(|v| v.as_str())
-        .unwrap_or("any");
-    let callsign = trigger
-        .conditions
-        .get("callsign")
-        .and_then(|v| v.as_str())
-        .unwrap_or("?");
-    format!("[{}] {} - \"{}\"", mode, callsign, trigger.comment)
+        .map(condition_label)
+        .unwrap_or_else(|| "any".to_string());
+    let filter = if let Some(callsign) = conditions.get("callsign") {
+        condition_label(callsign)
+    } else {
+        conditions
+            .as_object()
+            .into_iter()
+            .flat_map(|conditions| conditions.iter())
+            .filter(|(key, _)| *key != "mode")
+            .take(2)
+            .map(|(key, value)| format!("{key}={}", condition_label(value)))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let mut chars = filter.chars();
+    let mut filter: String = chars.by_ref().take(80).collect();
+    if chars.next().is_some() {
+        filter.push('…');
+    }
+    format!("[{mode}] {filter} - {:?}", settings.comment)
 }
 
 async fn fetch_triggers(client: &Client) -> Result<Vec<Trigger>, Box<dyn Error>> {
@@ -929,7 +948,7 @@ async fn change_trigger_state(
         if trigger.disabled.unwrap_or(false) == disabled {
             println!(
                 "Trigger {id} ({:?}) is already {target_state}.",
-                trigger.comment
+                trigger.settings.comment
             );
             return Ok(());
         }
@@ -947,13 +966,13 @@ async fn change_trigger_state(
         let choices: Vec<_> = eligible
             .iter()
             .map(|t| {
-                let conditions = t.conditions.to_string();
+                let conditions = t.settings.conditions.to_string();
                 let mut chars = conditions.chars();
                 let mut preview: String = chars.by_ref().take(100).collect();
                 if chars.next().is_some() {
                     preview.push('…');
                 }
-                format!("[{}] {:?} {}", t.id, t.comment, preview)
+                format!("[{}] {:?} {}", t.id, t.settings.comment, preview)
             })
             .collect();
         let prompt = format!("Select a trigger to {action}:");
@@ -972,41 +991,10 @@ async fn change_trigger_state(
     };
 
     set_trigger_disabled(client, TRIGGER_DISABLE_ENDPOINT, trigger, disabled).await?;
-    println!("{success} trigger {} ({:?}).", trigger.id, trigger.comment);
-    Ok(())
-}
-
-async fn add_trigger(
-    client: &Client,
-    callsign: Vec<String>, 
-    comment: &str,
-    actions: Vec<String>,
-    mode: Option<String>,
-) -> Result<(), Box<dyn Error>> {
-    let trigger_data = TriggerData {
-        conditions: Conditions {
-            callsign: callsign.clone(),
-            mode,
-        },
-        comment: comment.to_string(),
-        actions,
-        options: json!({}),
-    };
-
-    let response = client
-        .post("https://hamalert.org/ajax/trigger_update")
-        .json(&trigger_data)
-        .send()
-        .await?;
-
-    println!("Add trigger status for {}: {}", callsign.join(", "), response.status());
-
-    // Optionally print the response body
-    let body = response.text().await?;
-    if !body.is_empty() {
-        println!("Response: {}", body);
-    }
-
+    println!(
+        "{success} trigger {} ({:?}).",
+        trigger.id, trigger.settings.comment
+    );
     Ok(())
 }
 
@@ -1024,109 +1012,222 @@ async fn delete_trigger(client: &Client, id: &str) -> Result<(), Box<dyn Error>>
     Ok(())
 }
 
-async fn create_trigger_from_backup(
-    client: &Client,
-    trigger: &Trigger,
+impl LegacyCallsignFlags {
+    fn warn(&self) {
+        if self.compact || self.one_per_line {
+            eprintln!(
+                "Warning: --compact and --one-per-line are deprecated. Callsign lists are sent as JSON arrays."
+            );
+        }
+    }
+}
+
+fn set_list_condition(
+    settings: &mut TriggerSettings,
+    key: &str,
+    values: Vec<String>,
 ) -> Result<(), Box<dyn Error>> {
-    // Build trigger data without _id so a new one is created
-    let trigger_data = serde_json::json!({
-        "conditions": trigger.conditions,
-        "actions": trigger.actions,
-        "comment": trigger.comment,
-        "options": trigger.options.clone().unwrap_or(serde_json::json!({})),
-    });
-
-    let response = client
-        .post("https://hamalert.org/ajax/trigger_update")
-        .json(&trigger_data)
-        .send()
-        .await?;
-
-    if !response.status().is_success() {
-        return Err(format!(
-            "Failed to create trigger '{}': {}",
-            trigger.comment,
-            response.status()
-        )
-        .into());
-    }
-
+    let value = match values.as_slice() {
+        [] => return Ok(()),
+        [value] => json!(value),
+        _ => json!(values),
+    };
+    settings
+        .conditions
+        .as_object_mut()
+        .ok_or("Trigger conditions must be a JSON object")?
+        .insert(key.to_string(), value);
     Ok(())
 }
 
-async fn update_trigger(client: &Client, trigger: &Trigger) -> Result<(), Box<dyn Error>> {
-    let trigger_data = serde_json::json!({
-        "_id": trigger.id,
-        "conditions": trigger.conditions,
-        "actions": trigger.actions,
-        "comment": trigger.comment,
-        "options": trigger.options.clone().unwrap_or(serde_json::json!({})),
-    });
-
-    let response = client
-        .post("https://hamalert.org/ajax/trigger_update")
-        .json(&trigger_data)
-        .send()
-        .await?;
-
-    if !response.status().is_success() {
-        return Err(format!(
-            "Failed to update trigger '{}': {}",
-            trigger.comment,
-            response.status()
+impl NotificationFlags {
+    fn apply(self, settings: &mut TriggerSettings) -> Result<(), Box<dyn Error>> {
+        if !self.actions.is_empty() {
+            settings.actions = self
+                .actions
+                .iter()
+                .map(|action| action.as_str().into())
+                .collect();
+        }
+        set_list_condition(
+            settings,
+            "mode",
+            self.mode.iter().map(|mode| mode.as_str().into()).collect(),
         )
-        .into());
     }
-
-    Ok(())
 }
 
-/// Shared logic for importing callsigns from any source
+impl TriggerFlags {
+    fn is_empty(&self) -> bool {
+        self.callsign.is_empty()
+            && self.comment.is_none()
+            && self.notifications.actions.is_empty()
+            && self.notifications.mode.is_empty()
+            && self.snr_from.is_none()
+    }
+
+    fn apply(self, settings: &mut TriggerSettings, clear_snr: bool) -> Result<(), Box<dyn Error>> {
+        if let Some(comment) = self.comment {
+            settings.comment = comment;
+        }
+        set_list_condition(settings, "callsign", self.callsign)?;
+        self.notifications.apply(settings)?;
+        settings.apply_snr(self.snr_from, self.snr_to, clear_snr)
+    }
+}
+
+fn read_trigger_settings(path: &Path) -> Result<TriggerSettings, Box<dyn Error>> {
+    let content = if path == Path::new("-") {
+        std::io::read_to_string(std::io::stdin().lock())?
+    } else {
+        fs::read_to_string(path)
+            .map_err(|error| format!("Could not read {}: {error}", path.display()))?
+    };
+    serde_json::from_str(&content).map_err(|error| format!("Invalid trigger JSON: {error}").into())
+}
+
+fn edit_trigger_settings(
+    initial: &TriggerSettings,
+    original: Option<&TriggerSettings>,
+) -> Result<Option<TriggerSettings>, Box<dyn Error>> {
+    let mut file = tempfile::Builder::new()
+        .prefix("hamalert-trigger-")
+        .suffix(".json")
+        .tempfile()?;
+    serde_json::to_writer_pretty(file.as_file_mut(), initial)?;
+    writeln!(file)?;
+    let path = file.into_temp_path();
+
+    let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
+    loop {
+        let status = std::process::Command::new(&editor)
+            .arg(&path)
+            .status()
+            .map_err(|error| format!("Failed to open editor {editor:?}: {error}"))?;
+        if !status.success() {
+            return Err(format!("Editor exited with {status}").into());
+        }
+
+        let edited = fs::read_to_string(&path)?;
+        let result: Result<_, Box<dyn Error>> = serde_json::from_str::<TriggerSettings>(&edited)
+            .map_err(|error| format!("Invalid trigger JSON: {error}").into())
+            .and_then(|mut settings| {
+                if &settings != initial {
+                    settings.validate(original)?;
+                }
+                Ok(settings)
+            });
+        match result {
+            Ok(settings) => return Ok((&settings != initial).then_some(settings)),
+            Err(error) => eprintln!("{error}"),
+        }
+
+        println!("Press Enter to re-edit, or q to quit without saving:");
+        let mut retry = String::new();
+        if std::io::stdin().read_line(&mut retry)? == 0 || retry.trim().eq_ignore_ascii_case("q") {
+            return Ok(None);
+        }
+    }
+}
+
+impl TriggerInput {
+    fn settings(
+        self,
+        original: Option<&TriggerSettings>,
+        clear_snr: bool,
+    ) -> Result<Option<TriggerSettings>, Box<dyn Error>> {
+        if let Some(path) = self.from_json {
+            let mut settings = read_trigger_settings(&path)?;
+            settings.validate(original)?;
+            return Ok(Some(settings));
+        }
+
+        let mut settings = original.cloned().unwrap_or_default();
+        if self.editor || (original.is_some() && self.flags.is_empty() && !clear_snr) {
+            return edit_trigger_settings(&settings, original);
+        }
+        if original.is_none() && self.flags.callsign.is_empty() {
+            return Err("At least one --callsign must be provided when adding with flags".into());
+        }
+
+        self.flags.apply(&mut settings, clear_snr)?;
+        settings.validate(original)?;
+        Ok(Some(settings))
+    }
+}
+
+fn warn_on_zero_snr(settings: &TriggerSettings, original: Option<&TriggerSettings>) {
+    let changed_zero = ["snrFrom", "snrTo"].into_iter().any(|key| {
+        settings.conditions[key].as_i64() == Some(0)
+            && original.is_none_or(|original| original.conditions[key].as_i64() != Some(0))
+    });
+    if changed_zero {
+        eprintln!("Warning: HamAlert's published matcher treats a zero SNR bound as unset.");
+    }
+}
+
+fn pick_trigger_to_edit(triggers: &[Trigger]) -> Result<Option<&Trigger>, Box<dyn Error>> {
+    if triggers.is_empty() {
+        println!("No triggers found.");
+        return Ok(None);
+    }
+
+    println!("Select a trigger to edit:\n");
+    for (index, trigger) in triggers.iter().enumerate() {
+        println!(
+            "  {}. [{}] {}",
+            index + 1,
+            trigger.id,
+            format_trigger_for_display(trigger)
+        );
+    }
+    println!("\nEnter number (1-{}), or q to quit:", triggers.len());
+
+    let mut input = String::new();
+    let read = std::io::stdin().read_line(&mut input)?;
+    if read == 0 || input.trim().eq_ignore_ascii_case("q") {
+        println!("Cancelled.");
+        return Ok(None);
+    }
+    let selection: usize = input.trim().parse().map_err(|_| "Invalid selection")?;
+    selection
+        .checked_sub(1)
+        .and_then(|index| triggers.get(index))
+        .map(Some)
+        .ok_or_else(|| format!("Selection must be between 1 and {}.", triggers.len()).into())
+}
+
 async fn import_callsigns(
     client: &Client,
     callsigns: Vec<String>,
-    options: &ImportOptions,
+    options: ImportOptions,
 ) -> Result<(), Box<dyn Error>> {
-    let action_strings: Vec<String> = options
-        .trigger
-        .actions
-        .iter()
-        .map(|a| a.as_str().to_string())
-        .collect();
-
-    let mode_string = if options.trigger.mode.is_empty() {
-        None
-    } else {
-        Some(
-            options
-                .trigger
-                .mode
-                .iter()
-                .map(|m| m.as_str())
-                .collect::<Vec<_>>()
-                .join(","),
-        )
+    options.legacy.warn();
+    let mut settings = TriggerSettings {
+        comment: options.comment,
+        ..TriggerSettings::default()
     };
+    set_list_condition(&mut settings, "callsign", callsigns)?;
+    options.notifications.apply(&mut settings)?;
+    settings.validate(None)?;
 
     if options.dry_run {
-        println!("\nDry run - would add triggers for:");
-        for cs in &callsigns {
-            println!(
-                "  {} (comment: {:?}, actions: {:?}, mode: {:?})",
-                cs, options.trigger.comment, action_strings, mode_string
-            );
-        }
+        println!(
+            "\nDry run - would add trigger for {} (comment: {:?}, actions: {:?}, mode: {})",
+            condition_label(&settings.conditions["callsign"]),
+            settings.comment,
+            settings.actions,
+            settings
+                .conditions
+                .get("mode")
+                .map(condition_label)
+                .as_deref()
+                .unwrap_or("any")
+        );
     } else {
-        add_trigger(
-            client,
-            callsigns,
-            &options.trigger.comment,
-            action_strings,
-            mode_string,
-        )
-        .await?;
+        save_trigger(client, TRIGGER_UPDATE_ENDPOINT, None, &settings).await?;
+        println!("Added trigger: {}", settings.comment);
     }
-
     Ok(())
 }
 
@@ -1310,6 +1411,15 @@ fn auth_logout(
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let cli = Cli::parse();
+    if let Commands::Edit {
+        trigger_id: None,
+        input,
+        ..
+    } = &cli.command
+        && input.from_json.as_deref() == Some(Path::new("-"))
+    {
+        return Err("--trigger-id is required when editing from stdin".into());
+    }
     let config_path = config_path(cli.config_file.clone())?;
     let password_store = KeyringPasswordStore;
 
@@ -1332,38 +1442,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // Execute the subcommand
     match cli.command {
         Commands::Auth(_) => unreachable!("auth commands are handled before login"),
-        Commands::AddTrigger { callsign, options } => {
-            let action_strings: Vec<String> = options
-                .actions
-                .iter()
-                .map(|a| a.as_str().to_string())
-                .collect();
-
-            let mode_string = if options.mode.is_empty() {
-                None
-            } else {
-                Some(
-                    options
-                        .mode
-                        .iter()
-                        .map(|m| m.as_str())
-                        .collect::<Vec<_>>()
-                        .join(","),
-                )
-            };
-
-            if callsign.is_empty() {
-                return Err("At least one --callsign must be provided".into());
+        Commands::AddTrigger { input, legacy } => {
+            legacy.warn();
+            if let Some(settings) = input.settings(None, false)? {
+                warn_on_zero_snr(&settings, None);
+                save_trigger(&client, TRIGGER_UPDATE_ENDPOINT, None, &settings).await?;
+                println!("Added trigger: {}", settings.comment);
             }
-            // Add trigger
-            add_trigger(
-                &client,
-                callsign,
-                &options.comment,
-                action_strings,
-                mode_string,
-            )
-            .await?;
         }
         Commands::ImportPoloNotes { url, options } => {
             let callsigns = fetch_polo_notes(&client, &url).await?;
@@ -1375,7 +1460,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
             println!("Found {} callsigns at {}", callsigns.len(), url);
 
-            import_callsigns(&client, callsigns, &options).await?;
+            import_callsigns(&client, callsigns, options).await?;
         }
         Commands::ImportFile { file, options } => {
             let content = fs::read_to_string(&file)
@@ -1389,7 +1474,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
             println!("Found {} callsigns in {}", callsigns.len(), file.display());
 
-            import_callsigns(&client, callsigns, &options).await?;
+            import_callsigns(&client, callsigns, options).await?;
         }
         Commands::Backup { output } => {
             let triggers = fetch_triggers(&client).await?;
@@ -1457,8 +1542,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
             // Restore from backup
             for trigger in &backup_triggers {
-                create_trigger_from_backup(&client, trigger).await?;
-                println!("Restored trigger: {}", trigger.comment);
+                save_trigger(&client, TRIGGER_UPDATE_ENDPOINT, None, &trigger.settings).await?;
+                println!("Restored trigger: {}", trigger.settings.comment);
             }
             println!(
                 "\nRestored {} triggers from {}",
@@ -1466,95 +1551,41 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 input.display()
             );
         }
-        Commands::Edit => {
+        Commands::Edit {
+            trigger_id,
+            clear_snr,
+            input,
+        } => {
             let triggers = fetch_triggers(&client).await?;
+            let trigger = if let Some(id) = trigger_id {
+                triggers
+                    .iter()
+                    .find(|trigger| trigger.id == id)
+                    .ok_or_else(|| format!("No trigger found with ID {id}."))?
+            } else if let Some(trigger) = pick_trigger_to_edit(&triggers)? {
+                trigger
+            } else {
+                return Ok(());
+            };
 
-            if triggers.is_empty() {
-                println!("No triggers found.");
+            let original = &trigger.settings;
+            let Some(settings) = input.settings(Some(original), clear_snr)? else {
+                println!("No changes made.");
+                return Ok(());
+            };
+            if &settings == original {
+                println!("No changes made.");
                 return Ok(());
             }
-
-            // Display numbered list
-            println!("Select a trigger to edit:\n");
-            for (i, trigger) in triggers.iter().enumerate() {
-                println!("  {}. {}", i + 1, format_trigger_for_display(trigger));
-            }
-            println!("\nEnter number (1-{}), or q to quit: ", triggers.len());
-
-            // Read user selection
-            let mut input = String::new();
-            std::io::stdin().read_line(&mut input)?;
-            let input = input.trim();
-
-            if input.eq_ignore_ascii_case("q") {
-                println!("Cancelled.");
-                return Ok(());
-            }
-
-            let selection: usize = input.parse().map_err(|_| "Invalid selection")?;
-
-            if selection < 1 || selection > triggers.len() {
-                return Err(format!("Selection must be between 1 and {}", triggers.len()).into());
-            }
-
-            let mut trigger = triggers[selection - 1].clone();
-            let original_editable = EditableTrigger::from_trigger(&trigger);
-
-            // Create temp file with editable JSON
-            let temp_dir = std::env::temp_dir();
-            let temp_path = temp_dir.join(format!("hamalert-edit-{}.json", trigger.id));
-            let json = serde_json::to_string_pretty(&original_editable)?;
-            fs::write(&temp_path, &json)?;
-
-            // Open in editor
-            let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
-
-            loop {
-                let status = std::process::Command::new(&editor)
-                    .arg(&temp_path)
-                    .status()
-                    .map_err(|e| format!("Failed to open editor '{}': {}", editor, e))?;
-
-                if !status.success() {
-                    fs::remove_file(&temp_path).ok();
-                    return Err("Editor exited with error".into());
-                }
-
-                // Read and parse edited content
-                let edited_content = fs::read_to_string(&temp_path)?;
-
-                match serde_json::from_str::<EditableTrigger>(&edited_content) {
-                    Ok(edited) => {
-                        // Check if anything changed
-                        let edited_json = serde_json::to_string(&edited)?;
-                        let original_json = serde_json::to_string(&original_editable)?;
-
-                        if edited_json == original_json {
-                            println!("No changes made.");
-                        } else {
-                            edited.apply_to_trigger(&mut trigger);
-                            update_trigger(&client, &trigger).await?;
-                            println!("Updated trigger: {}", trigger.comment);
-                        }
-
-                        fs::remove_file(&temp_path).ok();
-                        break;
-                    }
-                    Err(e) => {
-                        println!("Invalid JSON: {}", e);
-                        println!("Press Enter to re-edit, or 'q' to quit without saving: ");
-
-                        let mut retry_input = String::new();
-                        std::io::stdin().read_line(&mut retry_input)?;
-
-                        if retry_input.trim().eq_ignore_ascii_case("q") {
-                            fs::remove_file(&temp_path).ok();
-                            println!("Cancelled without saving.");
-                            break;
-                        }
-                    }
-                }
-            }
+            warn_on_zero_snr(&settings, Some(original));
+            save_trigger(
+                &client,
+                TRIGGER_UPDATE_ENDPOINT,
+                Some(&trigger.id),
+                &settings,
+            )
+            .await?;
+            println!("Updated trigger: {}", settings.comment);
         }
         Commands::Pause { trigger_id } => {
             change_trigger_state(&client, trigger_id.as_deref(), true).await?
@@ -1587,15 +1618,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
             // Run the interactive multi-select
             let kept_result = MultiSelect::new(
                 "Select triggers to KEEP (unchecked will be deleted):",
-                display_items.clone(),
+                display_items,
             )
             .with_default(&default_selections)
             .with_vim_mode(true)
             .with_page_size(15)
             .with_help_message("Space=toggle, j/k=navigate, Enter=confirm, Esc=cancel")
-            .prompt();
+            .raw_prompt();
 
-            let kept_displays: Vec<String> = match kept_result {
+            let kept = match kept_result {
                 Ok(selected) => selected,
                 Err(InquireError::OperationCanceled) | Err(InquireError::OperationInterrupted) => {
                     println!("Operation cancelled.");
@@ -1605,11 +1636,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
             };
 
             // Find triggers to delete (those NOT in kept list)
-            let kept_set: std::collections::HashSet<&str> =
-                kept_displays.iter().map(|s| s.as_str()).collect();
+            let kept_indexes: std::collections::HashSet<_> =
+                kept.into_iter().map(|row| row.index).collect();
             let to_delete: Vec<&Trigger> = triggers
                 .iter()
-                .filter(|t| !kept_set.contains(format_trigger_for_display(t).as_str()))
+                .enumerate()
+                .filter_map(|(index, trigger)| (!kept_indexes.contains(&index)).then_some(trigger))
                 .collect();
 
             if to_delete.is_empty() {
@@ -1681,7 +1713,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 let current_triggers = fetch_triggers(&client).await?;
                 let current_stored: Vec<StoredTrigger> = current_triggers
                     .iter()
-                    .map(StoredTrigger::from_trigger)
+                    .map(|trigger| trigger.settings.clone())
                     .collect();
 
                 // Filter out permanent triggers for matching
@@ -1743,17 +1775,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 } else {
                     println!("Profile '{}' ({} triggers):", name, profile.len());
                     for trigger in &profile {
-                        let mode = trigger
-                            .conditions
-                            .get("mode")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("any");
-                        let callsign = trigger
-                            .conditions
-                            .get("callsign")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("?");
-                        println!("  - [{}] {} - \"{}\"", mode, callsign, trigger.comment);
+                        println!("  - {}", format_trigger_settings(trigger));
                     }
                 }
             }
@@ -1765,7 +1787,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
                 let current_stored: Vec<StoredTrigger> = current_triggers
                     .iter()
-                    .map(StoredTrigger::from_trigger)
+                    .map(|trigger| trigger.settings.clone())
                     .collect();
 
                 // Count permanent matches
@@ -1887,17 +1909,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 if !unexpected.is_empty() {
                     println!("\nUnmatched triggers ({}):", unexpected.len());
                     for t in &unexpected {
-                        let mode = t
-                            .conditions
-                            .get("mode")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("any");
-                        let callsign = t
-                            .conditions
-                            .get("callsign")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("?");
-                        println!("  - [{}] {} - \"{}\"", mode, callsign, t.comment);
+                        println!("  - {}", format_trigger_settings(t));
                     }
                 }
             }
@@ -1912,12 +1924,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             .map_err(|e| format!("Failed to parse backup file: {}", e))?;
                         backup_triggers
                             .iter()
-                            .map(StoredTrigger::from_trigger)
+                            .map(|trigger| trigger.settings.clone())
                             .collect()
                     }
                     None => {
                         let fetched = fetch_triggers(&client).await?;
-                        fetched.iter().map(StoredTrigger::from_trigger).collect()
+                        fetched
+                            .iter()
+                            .map(|trigger| trigger.settings.clone())
+                            .collect()
                     }
                 };
 
@@ -1984,7 +1999,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
                 let current_stored: Vec<StoredTrigger> = current_triggers
                     .iter()
-                    .map(StoredTrigger::from_trigger)
+                    .map(|trigger| trigger.settings.clone())
                     .collect();
 
                 // Categorize current triggers
@@ -2007,7 +2022,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 let to_delete: Vec<&Trigger> = current_triggers
                     .iter()
                     .filter(|t| {
-                        let stored = StoredTrigger::from_trigger(t);
+                        let stored = t.settings.clone();
                         !permanent.iter().any(|p| triggers_match(&stored, p))
                     })
                     .collect();
@@ -2025,17 +2040,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 );
                 if !permanent_triggers.is_empty() {
                     for t in &permanent_triggers {
-                        let mode = t
-                            .conditions
-                            .get("mode")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("any");
-                        let callsign = t
-                            .conditions
-                            .get("callsign")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("?");
-                        println!("  - [{}] {} - \"{}\"", mode, callsign, t.comment);
+                        println!("  - {}", format_trigger_settings(t));
                     }
                 }
 
@@ -2050,17 +2055,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     name
                 );
                 for t in &target_profile {
-                    let mode = t
-                        .conditions
-                        .get("mode")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("any");
-                    let callsign = t
-                        .conditions
-                        .get("callsign")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("?");
-                    println!("  - [{}] {} - \"{}\"", mode, callsign, t.comment);
+                    println!("  - {}", format_trigger_settings(t));
                 }
 
                 // Handle unexpected triggers
@@ -2070,17 +2065,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         unexpected.len()
                     );
                     for t in &unexpected {
-                        let mode = t
-                            .conditions
-                            .get("mode")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("any");
-                        let callsign = t
-                            .conditions
-                            .get("callsign")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("?");
-                        println!("  - [{}] {} - \"{}\"", mode, callsign, t.comment);
+                        println!("  - {}", format_trigger_settings(t));
                     }
 
                     if !no_dry_run {
@@ -2157,18 +2142,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
                 // 3. Create triggers from target profile
                 for stored in &target_profile {
-                    // Convert StoredTrigger to Trigger for API
-                    let trigger = Trigger {
-                        id: String::new(),
-                        user_id: None,
-                        conditions: stored.conditions.clone(),
-                        actions: stored.actions.clone(),
-                        comment: stored.comment.clone(),
-                        match_count: None,
-                        disabled: None,
-                        options: stored.options.clone(),
-                    };
-                    create_trigger_from_backup(&client, &trigger).await?;
+                    save_trigger(&client, TRIGGER_UPDATE_ENDPOINT, None, stored).await?;
                 }
                 println!("Created {} triggers from '{}'.", target_profile.len(), name);
 
@@ -2220,8 +2194,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 let existing_permanent = load_permanent_triggers()?;
 
                 // Convert to StoredTrigger for comparison
-                let stored_triggers: Vec<StoredTrigger> =
-                    triggers.iter().map(StoredTrigger::from_trigger).collect();
+                let stored_triggers: Vec<StoredTrigger> = triggers
+                    .iter()
+                    .map(|trigger| trigger.settings.clone())
+                    .collect();
 
                 // Build display items
                 let display_items: Vec<String> =
@@ -2239,17 +2215,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     "Select triggers to mark as PERMANENT (always active across all profiles):\n"
                 );
 
-                let selected_result = MultiSelect::new(
-                    "Permanent triggers (checked = permanent):",
-                    display_items.clone(),
-                )
-                .with_default(&default_selections)
-                .with_vim_mode(true)
-                .with_page_size(15)
-                .with_help_message("Space=toggle, j/k=navigate, Enter=confirm, Esc=cancel")
-                .prompt();
+                let selected_result =
+                    MultiSelect::new("Permanent triggers (checked = permanent):", display_items)
+                        .with_default(&default_selections)
+                        .with_vim_mode(true)
+                        .with_page_size(15)
+                        .with_help_message("Space=toggle, j/k=navigate, Enter=confirm, Esc=cancel")
+                        .raw_prompt();
 
-                let selected_displays: Vec<String> = match selected_result {
+                let selected = match selected_result {
                     Ok(selected) => selected,
                     Err(InquireError::OperationCanceled)
                     | Err(InquireError::OperationInterrupted) => {
@@ -2260,12 +2234,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 };
 
                 // Find which triggers were selected
-                let selected_set: std::collections::HashSet<&str> =
-                    selected_displays.iter().map(|s| s.as_str()).collect();
-                let new_permanent: Vec<StoredTrigger> = triggers
-                    .iter()
-                    .filter(|t| selected_set.contains(format_trigger_for_display(t).as_str()))
-                    .map(StoredTrigger::from_trigger)
+                let selected_indexes: std::collections::HashSet<_> =
+                    selected.into_iter().map(|row| row.index).collect();
+                let new_permanent: Vec<StoredTrigger> = stored_triggers
+                    .into_iter()
+                    .enumerate()
+                    .filter_map(|(index, trigger)| {
+                        selected_indexes.contains(&index).then_some(trigger)
+                    })
                     .collect();
 
                 save_permanent_triggers(&new_permanent)?;
@@ -2281,17 +2257,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 } else {
                     println!("Permanent triggers ({}):", permanent.len());
                     for trigger in &permanent {
-                        let mode = trigger
-                            .conditions
-                            .get("mode")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("any");
-                        let callsign = trigger
-                            .conditions
-                            .get("callsign")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("?");
-                        println!("  - [{}] {} - \"{}\"", mode, callsign, trigger.comment);
+                        println!("  - {}", format_trigger_settings(trigger));
                     }
                 }
             }
@@ -2308,6 +2274,150 @@ mod trigger_state_tests;
 mod tests {
     use super::*;
     use clap::error::ErrorKind;
+
+    #[test]
+    fn add_flags_serialize_lists_and_minimum_snr() {
+        let cli = Cli::try_parse_from([
+            "hamalert-cli",
+            "add-trigger",
+            "--callsign",
+            "W1AW",
+            "--callsign",
+            "K3LR",
+            "--comment",
+            "Test",
+            "--actions",
+            "app",
+            "--mode",
+            "cw",
+            "ft8",
+            "--snr-from",
+            "-15",
+        ])
+        .unwrap();
+        let Commands::AddTrigger { input, .. } = cli.command else {
+            panic!("expected an add command");
+        };
+        let settings = input.settings(None, false).unwrap().unwrap();
+        assert_eq!(
+            settings.conditions,
+            json!({
+                "callsign": ["W1AW", "K3LR"], "mode": ["cw", "ft8"],
+                "snrFrom": -15, "snrTo": 1_000_000,
+            })
+        );
+        assert_eq!(settings.actions, ["app"]);
+    }
+
+    #[test]
+    fn edit_flags_preserve_other_settings_and_can_clear_snr() {
+        let original: TriggerSettings = serde_json::from_value(json!({
+            "conditions": {"callsign": "W1AW", "snrFrom": -15, "snrTo": 5, "band": "20m"},
+            "actions": ["app"], "comment": "Existing", "options": {"future": {"enabled": true}},
+        }))
+        .unwrap();
+        let cli = Cli::try_parse_from([
+            "hamalert-cli",
+            "edit",
+            "--trigger-id",
+            "abc",
+            "--snr-from",
+            "-10",
+        ])
+        .unwrap();
+        let Commands::Edit {
+            input, clear_snr, ..
+        } = cli.command
+        else {
+            panic!("expected an edit command");
+        };
+        let settings = input.settings(Some(&original), clear_snr).unwrap().unwrap();
+        assert_eq!(
+            settings.conditions,
+            json!({
+                "callsign": "W1AW", "snrFrom": -10, "snrTo": 1_000_000, "band": "20m",
+            })
+        );
+        assert_eq!(settings.options, original.options);
+        assert_eq!(settings.actions, original.actions);
+        assert_eq!(settings.comment, original.comment);
+
+        let cli = Cli::try_parse_from(["hamalert-cli", "edit", "--clear-snr"]).unwrap();
+        let Commands::Edit {
+            input, clear_snr, ..
+        } = cli.command
+        else {
+            panic!("expected an edit command");
+        };
+        let cleared = input.settings(Some(&settings), clear_snr).unwrap().unwrap();
+        assert_eq!(
+            cleared.conditions,
+            json!({"callsign": "W1AW", "band": "20m"})
+        );
+    }
+
+    #[test]
+    fn trigger_input_modes_are_mutually_exclusive() {
+        for args in [
+            vec!["add-trigger", "--editor", "--callsign", "W1AW"],
+            vec!["edit", "--from-json", "-", "--comment", "test"],
+            vec!["edit", "--snr-from=-5", "--clear-snr"],
+        ] {
+            let error =
+                Cli::try_parse_from(std::iter::once("hamalert-cli").chain(args)).unwrap_err();
+            assert_eq!(error.kind(), ErrorKind::ArgumentConflict);
+        }
+        for args in [["add-trigger", "--editor"], ["edit", "--editor"]] {
+            assert!(Cli::try_parse_from(std::iter::once("hamalert-cli").chain(args)).is_ok());
+        }
+        assert!(Cli::try_parse_from(["hamalert-cli", "edit", "--snr-to", "5"]).is_err());
+    }
+
+    #[test]
+    fn json_input_can_create_and_replace_callsign_free_settings() {
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        let settings = json!({
+            "conditions": {"summitRef": "W4C/CM-001", "band": ["20m", "40m"]},
+            "actions": ["app"], "comment": "Summit alert",
+        });
+        serde_json::to_writer(&mut file, &settings).unwrap();
+        let path = file.path().to_str().unwrap();
+        let cli =
+            Cli::try_parse_from(["hamalert-cli", "add-trigger", "--from-json", path]).unwrap();
+        let Commands::AddTrigger { input, .. } = cli.command else {
+            panic!("expected an add command");
+        };
+        let created = input.settings(None, false).unwrap().unwrap();
+        assert_eq!(serde_json::to_value(&created).unwrap(), settings);
+
+        let original = TriggerSettings {
+            options: Some(json!({"autoUpdateSotaCompleteCandidates": true})),
+            ..created.clone()
+        };
+        let cli = Cli::try_parse_from(["hamalert-cli", "edit", "--from-json", path]).unwrap();
+        let Commands::Edit { input, .. } = cli.command else {
+            panic!("expected an edit command");
+        };
+        assert_eq!(
+            input.settings(Some(&original), false).unwrap(),
+            Some(created)
+        );
+    }
+
+    #[test]
+    fn full_trigger_json_round_trips_existing_backup_shape() {
+        let backup = json!({
+            "_id": "test", "user_id": "ham", "matchCount": 42, "disabled": true,
+            "conditions": {"callsign": "W1AW, K3LR", "mode": ["cw", "ft8"]},
+            "actions": ["app"], "comment": "Backup", "options": {"sota": true},
+        });
+        let trigger: Trigger = serde_json::from_value(backup.clone()).unwrap();
+        assert_eq!(
+            format_trigger_for_display(&trigger),
+            "[cw, ft8] W1AW, K3LR - \"Backup\""
+        );
+        assert_eq!(serde_json::to_value(trigger).unwrap(), backup);
+    }
 
     struct FakePasswordStore {
         result: PasswordStoreResult<Option<String>>,

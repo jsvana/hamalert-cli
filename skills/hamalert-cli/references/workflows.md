@@ -51,7 +51,24 @@ hamalert-cli add-trigger \
   --actions app telnet
 ```
 
-The CLI sends one trigger containing the joined callsigns.
+The CLI sends one trigger with the callsigns as a JSON array.
+
+## Set a Minimum SNR
+
+Create a trigger for FT8 spots at or above −15 dB.
+
+```bash
+hamalert-cli add-trigger --callsign W1AW --comment "W1AW FT8" \
+  --actions app --mode ft8 --snr-from=-15
+```
+
+To change the minimum on an existing trigger, use its exact `_id` from a backup or choose it in the `edit` picker.
+
+```bash
+hamalert-cli edit --trigger-id "$TRIGGER_ID" --snr-from=-10
+```
+
+Both commands use the default maximum when `--snr-to` is omitted. For other conditions and options, use the [trigger settings JSON](data-formats.md#trigger-settings-json).
 
 ## Import a Local Callsign File
 

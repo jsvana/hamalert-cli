@@ -41,7 +41,7 @@ hamalert-cli add-trigger ...
 hamalert-cli import-file ...            # without --dry-run
 hamalert-cli import-polo-notes ...      # without --dry-run
 hamalert-cli restore --input <file> --no-dry-run
-hamalert-cli edit
+hamalert-cli edit ...
 hamalert-cli pause [--trigger-id <TRIGGER_ID>]
 hamalert-cli resume [--trigger-id <TRIGGER_ID>]
 hamalert-cli bulk-delete                # without --dry-run
@@ -69,6 +69,7 @@ hamalert-cli profile switch <name> --no-dry-run
 
 ## Interaction Safety
 
+- `edit --trigger-id` with setting flags saves changes directly. The editor and `--from-json` replace the full editable settings.
 - For `bulk-delete`, all triggers start checked, meaning kept. Unchecked triggers are deleted.
 - For `profile set-permanent`, checked triggers become permanent.
 - If the user is not present for an interactive TUI, stop and ask for input rather than guessing.

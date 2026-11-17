@@ -1,6 +1,6 @@
 ---
 name: hamalert-cli
-description: Use the hamalert-cli command-line tool to manage HamAlert.org triggers, credentials, backups, restores, imports, bulk deletion, and trigger profiles. Use when a user asks an agent to configure HamAlert credentials, add callsign alerts, pause or resume triggers, import Ham2K PoLo or local callsign files, back up or restore triggers, inspect trigger/profile status, switch profiles, manage permanent triggers, or plan safe hamalert-cli operations.
+description: Use the hamalert-cli command-line tool to manage HamAlert.org triggers, credentials, backups, restores, imports, bulk deletion, and trigger profiles. Use when a user asks an agent to configure HamAlert credentials, add or edit alerts and SNR filters, pause or resume triggers, import Ham2K PoLo or local callsign files, back up or restore triggers, inspect trigger/profile status, switch profiles, manage permanent triggers, or plan safe hamalert-cli operations.
 ---
 
 # HamAlert CLI
@@ -53,6 +53,7 @@ Read `references/workflows.md` for full recipes. Common starting points:
 hamalert-cli auth status
 hamalert-cli backup
 hamalert-cli add-trigger --callsign W1AW --comment "W1AW spotted" --actions app
+hamalert-cli edit --trigger-id "$TRIGGER_ID" --snr-from=-15
 hamalert-cli import-file --file callsigns.txt --comment "Local imports" --actions app --dry-run
 hamalert-cli profile status
 hamalert-cli profile switch portable
