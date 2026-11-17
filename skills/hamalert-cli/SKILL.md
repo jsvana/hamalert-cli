@@ -1,6 +1,6 @@
 ---
 name: hamalert-cli
-description: Use the hamalert-cli command-line tool to manage HamAlert.org triggers, credentials, backups, restores, imports, bulk deletion, and trigger profiles. Use when a user asks an agent to configure HamAlert credentials, add callsign alerts, import Ham2K PoLo or local callsign files, back up or restore triggers, inspect trigger/profile status, switch profiles, manage permanent triggers, or plan safe hamalert-cli operations.
+description: Use the hamalert-cli command-line tool to manage HamAlert.org triggers, credentials, backups, restores, imports, bulk deletion, and trigger profiles. Use when a user asks an agent to configure HamAlert credentials, add callsign alerts, pause or resume triggers, import Ham2K PoLo or local callsign files, back up or restore triggers, inspect trigger/profile status, switch profiles, manage permanent triggers, or plan safe hamalert-cli operations.
 ---
 
 # HamAlert CLI

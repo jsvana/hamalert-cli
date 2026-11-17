@@ -209,6 +209,8 @@ hamalert-cli restore --input hamalert-backup-2025-01-15.json
 hamalert-cli restore --input hamalert-backup-2025-01-15.json --no-dry-run
 ```
 
+Restoring recreates triggers as enabled, even if they were paused when backed up.
+
 ### edit
 
 Interactively edit an existing trigger using your `$EDITOR`:
@@ -219,6 +221,17 @@ hamalert-cli edit
 # Opens selected trigger in your editor
 # Saves changes back to HamAlert
 ```
+
+### pause and resume
+
+Pause a trigger to stop its alerts while keeping its settings, then resume it when you want alerts again.
+
+```bash
+hamalert-cli pause   # Choose an enabled trigger
+hamalert-cli resume  # Choose a paused trigger
+```
+
+Press Esc to cancel the selection. For scripts, pass `--trigger-id <TRIGGER_ID>` with the exact `_id` from a backup or the picker. If the trigger is already in the requested state, the command reports that and leaves it as is.
 
 ### bulk-delete
 

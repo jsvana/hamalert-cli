@@ -71,7 +71,7 @@ hamalert-cli restore --input hamalert-backup-2026-07-08.json
 hamalert-cli restore --input hamalert-backup-2026-07-08.json --no-dry-run
 ```
 
-Dry-run is the default and previews replacing all existing triggers. `--no-dry-run` deletes existing triggers, creates an automatic backup first, and recreates triggers from the backup file.
+Dry-run is the default and previews replacing all existing triggers. `--no-dry-run` creates an automatic backup, deletes existing triggers, and recreates triggers from the backup file. Recreated triggers are enabled, even if they were paused in the backup.
 
 ## edit
 
@@ -80,6 +80,15 @@ hamalert-cli edit
 ```
 
 Fetches triggers, asks the user to choose one, opens editable JSON in `$EDITOR` or `vi`, validates JSON, and updates the live trigger if changed.
+
+## pause and resume
+
+```bash
+hamalert-cli pause [--trigger-id <TRIGGER_ID>]
+hamalert-cli resume [--trigger-id <TRIGGER_ID>]
+```
+
+`pause` disables a live trigger and `resume` enables it. Both preserve the trigger's settings. Without `--trigger-id`, choose one enabled trigger to pause or one paused trigger to resume. Press Esc to cancel. With `--trigger-id`, use the exact `_id` from a backup or the picker. If the trigger is already in the requested state, the command reports it without sending an update.
 
 ## bulk-delete
 
