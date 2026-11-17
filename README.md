@@ -124,15 +124,47 @@ This deletes the keyring password when present and removes any plaintext `passwo
 
 ### add-trigger
 
-Add callsign triggers with specified actions. Multiple callsigns create a single trigger with comma-separated callsigns:
+Create a trigger from command-line flags, an editor, or a JSON document. Repeat `--callsign` to watch multiple stations in one trigger.
 
 ```bash
 hamalert-cli add-trigger \
   --callsign W1AW \
   --callsign K3LR \
   --comment "Monitor activity" \
-  --actions app
+  --actions app \
+  --mode cw ft8 \
+  --snr-from -24 --snr-to -5
 ```
+
+Set a minimum SNR with `--snr-from` in whole dB. Omit `--snr-to` to use the default maximum.
+
+For more conditions and options, use `--editor` or `--from-json`. The editor starts with a JSON template containing empty `conditions`, `actions`, and `comment` fields.
+
+```bash
+hamalert-cli add-trigger --editor
+hamalert-cli add-trigger --from-json trigger.json
+hamalert-cli add-trigger --from-json - < trigger.json
+```
+
+Save this example as `trigger.json` to use it with `--from-json`. In VS Code, use `json.schemas` in User Settings to associate the schema with `**/hamalert-trigger-*.json` for temporary drafts. [Trigger settings schema](schemas/trigger-settings.schema.json) · [VS Code setup](https://code.visualstudio.com/docs/languages/json#_json-schemas-and-settings)
+
+```json
+{
+  "conditions": {
+    "callsign": ["W1AW", "K3LR"],
+    "band": ["20m", "40m"],
+    "mode": "ft8",
+    "source": "pskreporter",
+    "snrFrom": -24,
+    "snrTo": -5
+  },
+  "actions": ["app"],
+  "comment": "FT8 spots on 20m and 40m",
+  "options": {}
+}
+```
+
+For an example with nested options, see [Trigger settings JSON](skills/hamalert-cli/references/data-formats.md#trigger-settings-json).
 
 #### Available Actions
 
@@ -172,6 +204,8 @@ hamalert-cli import-file \
   --actions app \
   --dry-run  # Preview without creating triggers
 ```
+
+`add-trigger`, `import-file`, and `import-polo-notes` send multiple callsigns or modes as JSON arrays. The legacy `--compact` and `--one-per-line` flags are accepted with a deprecation warning.
 
 #### File Format
 
@@ -221,13 +255,25 @@ Restoring recreates triggers as enabled, even if they were paused when backed up
 
 ### edit
 
-Interactively edit an existing trigger using your `$EDITOR`:
+Run `edit` to select a trigger and open its current settings in `$EDITOR`. To skip the picker, set `TRIGGER_ID` to the trigger's `_id` from a backup and pass it with `--trigger-id`.
 
 ```bash
 hamalert-cli edit
-# Shows numbered list of triggers
-# Opens selected trigger in your editor
-# Saves changes back to HamAlert
+hamalert-cli edit --trigger-id "$TRIGGER_ID"
+```
+
+Use flags to update specific fields. `edit` accepts the same `--callsign`, `--comment`, `--actions`, `--mode`, and SNR flags as `add-trigger`. `--clear-snr` removes both SNR bounds.
+
+```bash
+hamalert-cli edit --trigger-id "$TRIGGER_ID" --snr-from -24 --snr-to -5
+hamalert-cli edit --trigger-id "$TRIGGER_ID" --clear-snr
+```
+
+Use `--from-json` to replace the full editable settings. Omit a condition or option from the document to remove it. Reading JSON from standard input requires `--trigger-id`.
+
+```bash
+hamalert-cli edit --trigger-id "$TRIGGER_ID" --from-json trigger.json
+hamalert-cli edit --trigger-id "$TRIGGER_ID" --from-json - < trigger.json
 ```
 
 ### pause and resume
@@ -336,7 +382,7 @@ Monitor a specific callsign with app notifications:
 hamalert-cli add-trigger --callsign K3LR --comment "K3LR spotted" --actions app
 ```
 
-Add multiple callsigns (creates one trigger with comma-separated callsigns):
+Watch multiple stations in one trigger:
 
 ```bash
 hamalert-cli add-trigger \

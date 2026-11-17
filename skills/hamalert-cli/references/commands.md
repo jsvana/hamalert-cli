@@ -29,13 +29,17 @@ Prefer `--password-stdin` or `--password-env` for automated use.
 ```bash
 hamalert-cli add-trigger --callsign W1AW --comment "W1AW spotted" --actions app
 hamalert-cli add-trigger --callsign W1AW --callsign K3LR --comment "Monitor activity" --actions app telnet
-hamalert-cli add-trigger --callsign VP8LP --comment "FT8 only" --actions app --mode ft8
+hamalert-cli add-trigger --callsign VP8LP --comment "FT8 spots" --actions app --mode ft8 --snr-from -24 --snr-to -5
+hamalert-cli add-trigger --editor
+hamalert-cli add-trigger --from-json trigger.json
+hamalert-cli add-trigger --from-json - < trigger.json
 ```
 
-`add-trigger` modifies live HamAlert state. Multiple `--callsign` values are sent as one trigger by joining callsigns. The default separator is comma-space. Use `--compact` for comma-only or `--one-per-line` for newline-separated callsigns.
+`add-trigger` modifies live HamAlert state. Choose flags, `--editor`, or `--from-json` for trigger settings. `--editor` opens a JSON template with empty conditions, actions, and comment. `--from-json` accepts a file or `-` for standard input. See [Trigger settings JSON](data-formats.md#trigger-settings-json).
 
-Actions: `url`, `app`, `threema`, `telnet`.
-Modes: `cw`, `ft8`, `ssb`.
+The `--actions` values are `url`, `app`, `threema`, and `telnet`. The `--mode` values are `cw`, `ft8`, and `ssb`.
+
+Use `--snr-from` to set a minimum SNR in whole dB. Omit `--snr-to` for the default maximum.
 
 ## import-polo-notes
 
@@ -54,6 +58,8 @@ hamalert-cli import-file --file callsigns.txt --comment "Local imports" --action
 ```
 
 Imports callsigns from a local text file. Use `--dry-run` first. See `data-formats.md` for file parsing rules.
+
+`add-trigger` and both imports send multiple callsigns or modes as arrays in a single trigger. The legacy `--compact` and `--one-per-line` flags are accepted with a deprecation warning.
 
 ## backup
 
@@ -77,9 +83,16 @@ Dry-run is the default and previews replacing all existing triggers. `--no-dry-r
 
 ```bash
 hamalert-cli edit
+hamalert-cli edit --trigger-id "$TRIGGER_ID"
+hamalert-cli edit --trigger-id "$TRIGGER_ID" --snr-from -24 --snr-to -5
+hamalert-cli edit --trigger-id "$TRIGGER_ID" --clear-snr
+hamalert-cli edit --trigger-id "$TRIGGER_ID" --from-json trigger.json
+hamalert-cli edit --trigger-id "$TRIGGER_ID" --from-json - < trigger.json
 ```
 
-Fetches triggers, asks the user to choose one, opens editable JSON in `$EDITOR` or `vi`, validates JSON, and updates the live trigger if changed.
+Without a settings flag or `--from-json`, opens the selected trigger's current settings in `$EDITOR` or `vi`. To skip the picker, pass the trigger's `_id` from a backup with `--trigger-id`. Standard input with `--from-json -` requires `--trigger-id`.
+
+`--comment`, `--actions`, `--callsign`, `--mode`, and the SNR flags update the supplied fields. `--clear-snr` removes both SNR bounds. The editor and `--from-json` replace the full editable settings. Omit a condition or option key from the document to remove it. See [Trigger settings JSON](data-formats.md#trigger-settings-json).
 
 ## pause and resume
 

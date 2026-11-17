@@ -1,0 +1,62 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "HamAlert trigger settings",
+  "description": "Editable settings for hamalert-cli add-trigger and edit.",
+  "type": "object",
+  "required": ["conditions", "actions", "comment"],
+  "properties": {
+    "conditions": {
+      "type": "object",
+      "minProperties": 1,
+      "description": "Spot filters. Add at least one condition before saving.",
+      "dependencies": { "snrTo": ["snrFrom"] },
+      "properties": {
+        "callsign": {
+          "description": "Match one or more callsigns without prefixes or suffixes.",
+          "allOf": [{ "$ref": "#/definitions/stringOrList" }]
+        },
+        "band": {
+          "description": "Bands to match, such as 20m or 40m.",
+          "allOf": [{ "$ref": "#/definitions/stringOrList" }]
+        },
+        "mode": {
+          "description": "Modes to match, such as cw or ft8.",
+          "allOf": [{ "$ref": "#/definitions/stringOrList" }]
+        },
+        "source": {
+          "description": "Spot sources to match, such as pskreporter.",
+          "allOf": [{ "$ref": "#/definitions/stringOrList" }]
+        },
+        "snrFrom": {
+          "type": "integer",
+          "description": "Minimum SNR in dB."
+        },
+        "snrTo": {
+          "type": "integer",
+          "description": "Maximum SNR in dB. Omit to use the default maximum."
+        }
+      }
+    },
+    "actions": {
+      "type": "array",
+      "description": "Notification actions, such as app, telnet, threema, or url.",
+      "items": { "type": "string" }
+    },
+    "comment": {
+      "type": "string",
+      "description": "Label displayed alongside the trigger."
+    },
+    "options": {
+      "description": "Optional settings such as Club Log configuration.",
+      "anyOf": [{ "type": "object" }, { "type": "array", "maxItems": 0 }, { "type": "null" }]
+    }
+  },
+  "definitions": {
+    "stringOrList": {
+      "anyOf": [
+        { "type": "string" },
+        { "type": "array", "minItems": 1, "items": { "type": "string" } }
+      ]
+    }
+  }
+}
